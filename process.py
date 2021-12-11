@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.ndimage.measurements import center_of_mass
 from skimage import io
 
 import time, os, glob
@@ -315,6 +316,19 @@ def calibrate(save_intrinsics=True, save_extrinsics=True):
                                                                      rmat_v_back=rmat_v_back)
 
     def calibrate_extrinsic_rotation():
+        transforms = []
+        for i in range(1,16):
+            rotated_path = os.path.join(BASEDIR, CALIB_DIR, str(i) + ".JPG")
+            tvec, rmat = calibrateExtrinsic(rotated_path, mtx, dist, dX, dY)
+            transforms.append({'rmat':rmat, 'tvec':tvec})
+
+        np.savez("transforms.npz", transforms=transforms)
+        
+    # calibrate_extrinsic_rotation()
+    
+
+    def find_rotation_axis():
+        transforms = np.load("transforms.npz", allow_pickle=True)['transforms']
 
         def z0_ray_plane_intersection(o, d):       # in 3D coordinate space of the PLANE. o: 3x1, d: 3x1
             # Use N = [0,0,1], origin = [0,0,0]. c = dot(N, origin: could be any point on the plane though) = 0
@@ -327,17 +341,14 @@ def calibrate(save_intrinsics=True, save_extrinsics=True):
             c = np.dot(N, P0)
             point = o + ((c - np.dot(N, o)) / np.dot(N, d)) * d
             return point
-
-        def get_planes():
-            transforms = []
-            checkboard_centers = []    # in camera coordinate space
+    
+        def get_rot_plane_eqs():
             planes = []
-            for i in range(1,16):
-                rotated_path = os.path.join(BASEDIR, CALIB_DIR, str(i) + ".JPG")
+            for i in range(15):
+                rotated_path = os.path.join(BASEDIR, CALIB_DIR, str(i+1) + ".JPG")
                 I = rgb2gray(io.imread(rotated_path))
 
-                tvec, rmat = calibrateExtrinsic(rotated_path, mtx, dist, dX, dY)
-                transforms.append({'rmat':rmat, 'tvec':tvec})
+                rmat, tvec = (transforms[i]['rmat'], transforms[i]['tvec'])
 
                 # Cast rays from image corners -> plane (represented in plane coordinate frame)
                 a_ray = np.matmul(rmat.T, np.squeeze(200*pixel2ray(np.float32([[0,0]]), mtx, dist)).T)
@@ -345,15 +356,15 @@ def calibrate(save_intrinsics=True, save_extrinsics=True):
                 c_ray = np.matmul(rmat.T, np.squeeze(200*pixel2ray(np.float32([[0, I.shape[0]]]), mtx, dist)).T)
                 d_ray = np.matmul(rmat.T, np.squeeze(200*pixel2ray(np.float32([[I.shape[1], I.shape[0]]]), mtx, dist)).T)
                 a_ray, b_ray, c_ray, d_ray = (a_ray.reshape(-1, 1), 
-                                              b_ray.reshape(-1, 1),
-                                              c_ray.reshape(-1, 1),
-                                              d_ray.reshape(-1, 1))
+                                                b_ray.reshape(-1, 1),
+                                                c_ray.reshape(-1, 1),
+                                                d_ray.reshape(-1, 1))
                 camera_origin = np.matmul(rmat.T, np.array([[0,0,0]]).T - tvec)
                 # Get points of intersection with plane in plane coordinate space
                 A,B,C,D = (z0_ray_plane_intersection(camera_origin, a_ray),
-                           z0_ray_plane_intersection(camera_origin, b_ray),
-                           z0_ray_plane_intersection(camera_origin, c_ray),
-                           z0_ray_plane_intersection(camera_origin, d_ray))
+                            z0_ray_plane_intersection(camera_origin, b_ray),
+                            z0_ray_plane_intersection(camera_origin, c_ray),
+                            z0_ray_plane_intersection(camera_origin, d_ray))
                 # Convert points back in the camera coordinate system 
                 A,B,C,D = (np.matmul(rmat, A) + tvec,
                             np.matmul(rmat, B) + tvec,
@@ -362,8 +373,9 @@ def calibrate(save_intrinsics=True, save_extrinsics=True):
                 N = np.cross((B-A).T, (D-B).T)
                 N = N / np.linalg.norm(N)
                 planes.append((N, A))
-        # get_planes()
-
+            np.savez("planes.npz", planes=planes)
+        # get_rot_plane_eqs()
+       
         planes = np.load('planes.npz', allow_pickle=True)['planes']
         transforms = np.load('transforms.npz', allow_pickle=True)['transforms']
 
@@ -408,7 +420,8 @@ def calibrate(save_intrinsics=True, save_extrinsics=True):
             print('R =', R)
 
             return center
-        xc,yc,zc = find_circle_center()
+        center = find_circle_center()
+        xc,yc,zc = center
 
         # Identify plane fitting through the circle points, and extract its normal and a point on the plane
         # Code obtained from answer: https://stackoverflow.com/questions/20699821/find-and-draw-regression-plane-to-a-set-of-points/20700063#20700063
@@ -451,9 +464,15 @@ def calibrate(save_intrinsics=True, save_extrinsics=True):
         def get_axis():
             # Axis is centered at the center of the circle
             # and extends outward from the plane of the circle
-            #
+            print("blah")
 
+            pt = center + normal * 10      # arbitrary
+            axis = pt - center
+            axis = axis / np.linalg.norm(axis)
+            return axis
 
+        axis = get_axis()
+            
         def visualize_planes():
             fig = plt.figure()
             ax = fig.add_subplot(111, projection='3d')
@@ -489,13 +508,10 @@ def calibrate(save_intrinsics=True, save_extrinsics=True):
             z = (-normal[0] * xx - normal[1] * yy - d) * 1. / normal[2]
             ax.plot_surface(xx, yy, z, alpha=0.2, color=[1,0,0])
 
-
             plt.show()
         visualize_planes()
 
-        
-
-
+        return axis
 
     # -------------------- Translation stage --------------------
     # Use first image of the front and back screen captures
@@ -504,13 +520,13 @@ def calibrate(save_intrinsics=True, save_extrinsics=True):
     back_path = os.path.join(BASEDIR, CAPTURE_DIR, ROTATED_DIRS[0], BACK_DIR)
     # if (save_extrinsics): calibrate_extrinsic_translation(front_path, back_path)
 
-
-
-
     # -------------------- Rotation stage --------------------
     # Find the axis of rotation of the rotation stage using the least squares circle
     # of the checkerboard origins of the rotated views   of the calibration plane on the rotation stage 
-    if (save_extrinsics): calibrate_extrinsic_rotation()
+    # if (save_extrinsics): calibrate_extrinsic_rotation()
+
+    # Finally, we need to find the axis of rotation w/ respect to the turntable 
+    rotation_axis = find_rotation_axis()
 
 
 
