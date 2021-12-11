@@ -8,8 +8,8 @@ from scipy import ndimage, interpolate
 from skimage.color import rgb2gray
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-from cv2 import GaussianBlur, line, undistortPoints
-from calibrate import calibrateIntrinsic
+import cv2
+from calibrate import calibrateIntrinsic, calibrateExtrinsic, pixel2ray
 
 BASEDIR = "."
 
@@ -71,6 +71,7 @@ def gen_backdrop_images():
         image_editable = ImageDraw.Draw(img)
         image_editable.text((2225,0), B_V_DIR + "_" + str(r), (255,255,255), font=label_font)
         img.save(img_path)
+
 
 
 '''
@@ -261,9 +262,207 @@ def determine_backdrop_position():
 
 
 
+'''
+Calibration to simulate multiple rotated camera views
+'''
+CALIB_DIR = "calibrate"
+CAPTURE_DIR = "capture"
+ROTATED_DIRS = ["0", "-10", "-20", "-30", "10", "20", "30"]
+FRONT_DIR, BACK_DIR = ("front", "back")
+
+# Extrinsic calibration parameters
+dX = 230.0 #calibration plane length in x direction (in mm)
+dY = 160.0 #calibration plane length in y direction (in mm)
+dW2 = (8, 8) #window size finding ground plane corners
+
+def calibrate(save_intrinsics=True, save_extrinsics=True): 
+    
+    '''
+        INTRINSIC CALIBRATION
+    '''
+    def calibrate_intrinsic():
+        images = glob.glob(os.path.join(BASEDIR, CALIB_DIR, "*.JPG"))
+        mtx, dist = calibrateIntrinsic(images, (6,8), (8,8))
+        np.savez(os.path.join(BASEDIR, CALIB_DIR, "intrinsics.npz"), mtx=mtx,
+                                                                     dist=dist)
+    
+    # if (save_intrinsics): calibrate_intrinsic()
+    with np.load(os.path.join(BASEDIR, CALIB_DIR, "intrinsics.npz")) as X:
+        mtx, dist = [X[i] for i in ('mtx', 'dist')]
+        
+
+    '''
+        EXTRINSIC CALIBRATION
+
+        Perform extrinsic calibration against the two screen planes,
+        where screen1 refers to the first monitor screen plane, and screen2 refers
+        to the screen translated backwards some (fixed) distance on the translation stage.
+
+        So long as we move the screen on the translation stage to fixed positions
+        for the front and back screens, the extrinsic calibration process needs only
+        to be computed once and shared over the seven different rotated views
+
+    '''
+    def calibrate_extrinsic_translation(screen1_path, screen2_path):
+        tvec_front, rmat_front = calibrateExtrinsic(screen1_path, mtx, dist, dX, dY)
+        tvec_v_back, rmat_v_back = calibrateExtrinsic(screen2_path, mtx, dist, dX, dY)
+
+        ext_out = {"tvec_front":tvec_front, "rmat_front":rmat_front, "tvec_v_back":tvec_v_back, "rmat_v_back":rmat_v_back}
+        np.savez(os.path.join(BASEDIR, CALIB_DIR, "extrinsics.npz"), tvec_front=tvec_front, 
+                                                                     rmat_front=rmat_front, 
+                                                                     tvec_v_back=tvec_v_back,
+                                                                     rmat_v_back=rmat_v_back)
+
+    def calibrate_extrinsic_rotation():
+
+        def z0_ray_plane_intersection(o, d):       # in 3D coordinate space of the PLANE. o: 3x1, d: 3x1
+            # Use N = [0,0,1], origin = [0,0,0]. c = dot(N, origin: could be any point on the plane though) = 0
+            N = np.array([[0,0,1]])
+            point = o + (- np.dot(N, o) / np.dot(N, d)) * d
+            return point
+
+        '''
+            Create a map between rotated view -> rotation, translation 
+        '''
+        transforms = []
+        checkboard_centers = []    # in camera coordinate space
+        planes = []
+        for i in range(1,16):
+            rotated_path = os.path.join(BASEDIR, CALIB_DIR, str(i) + ".JPG")
+            I = rgb2gray(io.imread(rotated_path))
+
+            tvec, rmat = calibrateExtrinsic(rotated_path, mtx, dist, dX, dY)
+            
+            if (i == 0): transforms.append({'rmat':rmat, 'tvec':tvec})
+            if (i == 1): transforms.append({'rmat':rmat, 'tvec':tvec})
+            if (i == 2): transforms.append({'rmat':rmat, 'tvec':tvec})
+            if (i == 3): transforms.append({'rmat':rmat, 'tvec':tvec})
+            if (i == 4): transforms.append({'rmat':rmat, 'tvec':tvec})
+            if (i == 5): transforms.append({'rmat':rmat, 'tvec':tvec})
+            if (i == 6): transforms.append({'rmat':rmat, 'tvec':tvec})
+
+            obj_origin = np.array([[0,0,0]]).T
+            origin_in_camera = np.matmul(rmat, obj_origin) + tvec
+            checkboard_centers[:,:,i-1] = origin_in_camera
+
+
+            # Cast rays from image corners -> plane (represented in plane coordinate frame)
+            image_corners = np.float32([[0,0], [I.shape[1], 0], [0, I.shape[0]], [I.shape[1], I.shape[0]]])
+            corner_rays = np.matmul(rmat.T, np.squeeze(200*pixel2ray(image_corners, mtx, dist)).T)
+            a_ray, b_ray, c_ray, d_ray = (corner_rays[0,:].reshape(-1, 1), 
+                                          corner_rays[1,:].reshape(-1, 1),
+                                          corner_rays[2,:].reshape(-1, 1),
+                                          corner_rays[3,:].reshape(-1, 1))
+            camera_origin = np.matmul(rmat.T, np.array([[0,0,0]]).T - tvec)
+            # Get points of intersection with plane in plane coordinate space
+            A,B,C,D = (z0_ray_plane_intersection(camera_origin, a_ray),
+                       z0_ray_plane_intersection(camera_origin, b_ray),
+                       z0_ray_plane_intersection(camera_origin, c_ray),
+                       z0_ray_plane_intersection(camera_origin, d_ray))
+            # Convert points back in the camera coordinate system 
+            A,B,C,D = (np.matmul(rmat, A) + tvec,
+                        np.matmul(rmat, B) + tvec,
+                        np.matmul(rmat, C) + tvec,
+                        np.matmul(rmat, D) + tvec)
+            N = np.cross((B-A).T, (D-B).T)
+            N = N / np.linalg.norm(N)
+            planes.append((N, A))
+
+            print("N", N, N.flatten())
+            print("A", A, A.flatten())
+
+        np.savez("test.npz", checkboard_centers=checkboard_centers)
+        np.savez("transforms.npz", transforms=transforms)
+
+        # Visualize plane in camera coordinate system
+        # Based on stack overflow tutorial: https://stackoverflow.com/questions/36060933/matplotlib-plot-a-plane-and-points-in-3d-simultaneously
+        d = - np.dot(N.flatten(), A.flatten())
+        xx, yy = np.meshgrid(range(I.shape[1]), range(I.shape[0]))  # grid over image coordinates 
+        z = (d - N[0]*xx - N[1]*yy) / N[2]
+        plt3d = plt.figure().gca(projection='3d')
+        plt3d.plot_surface(xx,yy,z, alpha=0.2)
+
+
+
+        # checkboard_centers = np.load("test.npz")['checkboard_centers']
+        # fig = plt.figure()
+        # ax = fig.add_subplot(111, projection='3d')
+        # ax.set_xlabel('X')
+        # ax.set_ylabel('Y')
+        # ax.set_zlabel('Z')
+        # for i in range(15):
+        #     point = checkboard_centers[:,:,i]
+        #     ax.plot(point[0], point[1], point[2], 'ro')
+        # plt.show()
+
+        
+        # Determine the least squares circle from these camera coordinate locations
+
+
+    # -------------------- Translation stage --------------------
+    # Use first image of the front and back screen captures
+    # WLOG will always collect data for straight-on view (i.e. rotation = 0)
+    front_path = os.path.join(BASEDIR, CAPTURE_DIR, ROTATED_DIRS[0], FRONT_DIR)
+    back_path = os.path.join(BASEDIR, CAPTURE_DIR, ROTATED_DIRS[0], BACK_DIR)
+    # if (save_extrinsics): calibrate_extrinsic_translation(front_path, back_path)
+
+
+    # -------------------- Rotation stage --------------------
+    # Find the axis of rotation of the rotation stage using the least squares circle
+    # of the checkerboard origins of the rotated views   of the calibration plane on the rotation stage 
+    if (save_extrinsics): calibrate_extrinsic_rotation()
+    
+
+
+'''
+Reconstruction
+'''
+def reconstruction():
+    with np.load(os.path.join(BASEDIR, CALIB_DIR, "intrinsics.npz")) as X:
+        mtx, dist, rvecs, tvecs = [X[i] for i in ('mtx', 'dist', 'rvecs', 'tvecs')]
+
+    '''
+        For each camera view:
+        - rmat, tvec: extrinsic parameters from plane
+    '''
+
+    def get_c_world(rmat, tvec):
+        return np.matmul(-rmat.T, tvec)
+
+    # x, y: coordinates (COLUMN, ROW)!
+    # TODO: apply rotation to get back into world coordinates
+    def get_q_world(x, y, rmat, tvec):
+        undist = cv2.undistortPoints(np.float32([[x, y]]), mtx, dist)
+        homogenous = cv2.convertPointsToHomogeneous(undist)
+        point = np.matmul(rmat.T, homogenous - tvec)
+        point = point[0,:].reshape(-1, 1)
+        return point
+
+
+
+    # l_f : 1x3, f->q (magnitude = distance to image plane from f)
+    # r : scalar, IOR
+    def compute_nf(c, f, b, l_f, r):
+        d = np.linalg.norm(l_f)
+        o = l_f / d
+        i = c - (d*o) - b           # represents lm
+
+        term = i - (np.dot(i, o)*o)
+        term = term / np.linalg.norm(term)
+
+        n_f = ( r * np.linalg.norm(i * o) * term ) + ( ((r * np.dot(i, o)) - 1) * o )
+        return n_f
+
+
+
+
 def main():
     # gen_backdrop_images()
-    determine_backdrop_position()
+
+    calibrate()
+
+
+    # determine_backdrop_position()
 
 if __name__ == "__main__":
     main()
