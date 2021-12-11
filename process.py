@@ -4,12 +4,13 @@ from skimage import io
 import time, os, glob
 from PIL import Image, ImageFont, ImageDraw 
 
-from scipy import ndimage, interpolate
+from scipy import ndimage, optimize
 from skimage.color import rgb2gray
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import cv2
-from calibrate import calibrateIntrinsic, calibrateExtrinsic, pixel2ray
+from calibrate import calibrateIntrinsic, calibrateExtrinsic, pixel2ray, set_axes_equal
+import functools 
 
 BASEDIR = "."
 
@@ -321,82 +322,179 @@ def calibrate(save_intrinsics=True, save_extrinsics=True):
             point = o + (- np.dot(N, o) / np.dot(N, d)) * d
             return point
 
-        '''
-            Create a map between rotated view -> rotation, translation 
-        '''
-        transforms = []
-        checkboard_centers = []    # in camera coordinate space
-        planes = []
-        for i in range(1,16):
-            rotated_path = os.path.join(BASEDIR, CALIB_DIR, str(i) + ".JPG")
-            I = rgb2gray(io.imread(rotated_path))
+        def rp_intersect(N, P0, o, d):       # in 3D coordinate space of the CAMERA
+            N, P0, o, d = (N.reshape(-1), P0.reshape(-1), o.reshape(-1), d.reshape(-1))    
+            c = np.dot(N, P0)
+            point = o + ((c - np.dot(N, o)) / np.dot(N, d)) * d
+            return point
 
-            tvec, rmat = calibrateExtrinsic(rotated_path, mtx, dist, dX, dY)
+        def get_planes():
+            transforms = []
+            checkboard_centers = []    # in camera coordinate space
+            planes = []
+            for i in range(1,16):
+                rotated_path = os.path.join(BASEDIR, CALIB_DIR, str(i) + ".JPG")
+                I = rgb2gray(io.imread(rotated_path))
+
+                tvec, rmat = calibrateExtrinsic(rotated_path, mtx, dist, dX, dY)
+                transforms.append({'rmat':rmat, 'tvec':tvec})
+
+                # Cast rays from image corners -> plane (represented in plane coordinate frame)
+                a_ray = np.matmul(rmat.T, np.squeeze(200*pixel2ray(np.float32([[0,0]]), mtx, dist)).T)
+                b_ray = np.matmul(rmat.T, np.squeeze(200*pixel2ray(np.float32([[I.shape[1], 0]]), mtx, dist)).T)
+                c_ray = np.matmul(rmat.T, np.squeeze(200*pixel2ray(np.float32([[0, I.shape[0]]]), mtx, dist)).T)
+                d_ray = np.matmul(rmat.T, np.squeeze(200*pixel2ray(np.float32([[I.shape[1], I.shape[0]]]), mtx, dist)).T)
+                a_ray, b_ray, c_ray, d_ray = (a_ray.reshape(-1, 1), 
+                                              b_ray.reshape(-1, 1),
+                                              c_ray.reshape(-1, 1),
+                                              d_ray.reshape(-1, 1))
+                camera_origin = np.matmul(rmat.T, np.array([[0,0,0]]).T - tvec)
+                # Get points of intersection with plane in plane coordinate space
+                A,B,C,D = (z0_ray_plane_intersection(camera_origin, a_ray),
+                           z0_ray_plane_intersection(camera_origin, b_ray),
+                           z0_ray_plane_intersection(camera_origin, c_ray),
+                           z0_ray_plane_intersection(camera_origin, d_ray))
+                # Convert points back in the camera coordinate system 
+                A,B,C,D = (np.matmul(rmat, A) + tvec,
+                            np.matmul(rmat, B) + tvec,
+                            np.matmul(rmat, C) + tvec,
+                            np.matmul(rmat, D) + tvec)
+                N = np.cross((B-A).T, (D-B).T)
+                N = N / np.linalg.norm(N)
+                planes.append((N, A))
+        # get_planes()
+
+        planes = np.load('planes.npz', allow_pickle=True)['planes']
+        transforms = np.load('transforms.npz', allow_pickle=True)['transforms']
+
+        X = []
+        Y = []
+        Z = []
+        points = []
+        for i in range(len(transforms)):
+            rmat, tvec = (transforms[i]['rmat'], transforms[i]['tvec'])
+            obj_origin = np.array([0,0,0])
+            origin_in_camera = (np.matmul(rmat, obj_origin.reshape(-1, 1)) + tvec).reshape(-1)
+            X.append(origin_in_camera[0])
+            Y.append(origin_in_camera[1])
+            Z.append(origin_in_camera[2])
+            points.append((origin_in_camera[0], origin_in_camera[1], origin_in_camera[2]))
+        
+        # Use least-squares fitting to find the equation of the circle
+        # Code obtained from: https://stackoverflow.com/questions/15481242/python-optimize-leastsq-fitting-a-circle-to-3d-set-of-points/15786868
+        # TODO: Broken
+        def find_circle_center():
+            def calc_R(xc, yc, zc):
+                """ calculate the distance of each 3D points from the center (xc, yc, zc) """
+                return np.sqrt((X - xc) ** 2 + (Y - yc) ** 2 + (Z - zc) ** 2)
+
+            def func(c):
+                """ calculate the algebraic distance between the 3D points and the mean circle centered at c=(xc, yc, zc) """
+                Ri = calc_R(*c)
+                return Ri - np.mean(Ri)
+
+            # Determine the least squares circle from these camera coordinate locations
+            XM = np.mean(X)
+            YM = np.mean(Y)
+            ZM = np.mean(Z)
+            center_estimate = XM, YM, ZM
+            center, ier = optimize.leastsq(func, center_estimate)
+            print("CENTER: ", center)
+
+            xc, yc, zc = center
+            Ri       = calc_R(xc, yc, zc)
+            R        = np.mean(Ri)
+            residu   = np.sum((Ri - R)**2)
+            print('R =', R)
+
+            return center
+        xc,yc,zc = find_circle_center()
+
+        # Identify plane fitting through the circle points, and extract its normal and a point on the plane
+        # Code obtained from answer: https://stackoverflow.com/questions/20699821/find-and-draw-regression-plane-to-a-set-of-points/20700063#20700063
+        def find_circle_plane():
+            def plane(x, y, params):
+                a = params[0]
+                b = params[1]
+                c = params[2]
+                z = a*x + b*y + c
+                return z
             
-            if (i == 0): transforms.append({'rmat':rmat, 'tvec':tvec})
-            if (i == 1): transforms.append({'rmat':rmat, 'tvec':tvec})
-            if (i == 2): transforms.append({'rmat':rmat, 'tvec':tvec})
-            if (i == 3): transforms.append({'rmat':rmat, 'tvec':tvec})
-            if (i == 4): transforms.append({'rmat':rmat, 'tvec':tvec})
-            if (i == 5): transforms.append({'rmat':rmat, 'tvec':tvec})
-            if (i == 6): transforms.append({'rmat':rmat, 'tvec':tvec})
+            def error(params, points):
+                result = 0
+                for (x,y,z) in points:
+                    plane_z = plane(x, y, params)
+                    diff = abs(plane_z - z)
+                    result += diff**2
+                return result
 
-            obj_origin = np.array([[0,0,0]]).T
-            origin_in_camera = np.matmul(rmat, obj_origin) + tvec
-            checkboard_centers[:,:,i-1] = origin_in_camera
+            def cross(a, b):
+                return [a[1]*b[2] - a[2]*b[1],
+                        a[2]*b[0] - a[0]*b[2],
+                        a[0]*b[1] - a[1]*b[0]]
 
+            fun = functools.partial(error, points=points)
+            params0 = [0,0,0]
+            res = optimize.minimize(fun, params0)
 
-            # Cast rays from image corners -> plane (represented in plane coordinate frame)
-            image_corners = np.float32([[0,0], [I.shape[1], 0], [0, I.shape[0]], [I.shape[1], I.shape[0]]])
-            corner_rays = np.matmul(rmat.T, np.squeeze(200*pixel2ray(image_corners, mtx, dist)).T)
-            a_ray, b_ray, c_ray, d_ray = (corner_rays[0,:].reshape(-1, 1), 
-                                          corner_rays[1,:].reshape(-1, 1),
-                                          corner_rays[2,:].reshape(-1, 1),
-                                          corner_rays[3,:].reshape(-1, 1))
-            camera_origin = np.matmul(rmat.T, np.array([[0,0,0]]).T - tvec)
-            # Get points of intersection with plane in plane coordinate space
-            A,B,C,D = (z0_ray_plane_intersection(camera_origin, a_ray),
-                       z0_ray_plane_intersection(camera_origin, b_ray),
-                       z0_ray_plane_intersection(camera_origin, c_ray),
-                       z0_ray_plane_intersection(camera_origin, d_ray))
-            # Convert points back in the camera coordinate system 
-            A,B,C,D = (np.matmul(rmat, A) + tvec,
-                        np.matmul(rmat, B) + tvec,
-                        np.matmul(rmat, C) + tvec,
-                        np.matmul(rmat, D) + tvec)
-            N = np.cross((B-A).T, (D-B).T)
-            N = N / np.linalg.norm(N)
-            planes.append((N, A))
+            a = res.x[0]
+            b = res.x[1]
+            c = res.x[2]
+            xs, ys, zs = zip(*points)
 
-            print("N", N, N.flatten())
-            print("A", A, A.flatten())
+            point = np.array([0.0, 0.0, c])
+            normal = np.cross(np.array([1,0,a]), np.array([0,1,b]))
 
-        np.savez("test.npz", checkboard_centers=checkboard_centers)
-        np.savez("transforms.npz", transforms=transforms)
-
-        # Visualize plane in camera coordinate system
-        # Based on stack overflow tutorial: https://stackoverflow.com/questions/36060933/matplotlib-plot-a-plane-and-points-in-3d-simultaneously
-        d = - np.dot(N.flatten(), A.flatten())
-        xx, yy = np.meshgrid(range(I.shape[1]), range(I.shape[0]))  # grid over image coordinates 
-        z = (d - N[0]*xx - N[1]*yy) / N[2]
-        plt3d = plt.figure().gca(projection='3d')
-        plt3d.plot_surface(xx,yy,z, alpha=0.2)
+            return point, normal, xs, ys, zs
+        point, normal, xs, ys, zs = find_circle_plane()
+        
+        def get_axis():
+            # Axis is centered at the center of the circle
+            # and extends outward from the plane of the circle
+            #
 
 
+        def visualize_planes():
+            fig = plt.figure()
+            ax = fig.add_subplot(111, projection='3d')
+            ax.set_xlabel('X')
+            ax.set_ylabel('Y')
+            ax.set_zlabel('Z')
+        
+            for i in range(len(planes)):
+                N, A = planes[i]
+                N = N.flatten()
+                A = A.flatten()
 
-        # checkboard_centers = np.load("test.npz")['checkboard_centers']
-        # fig = plt.figure()
-        # ax = fig.add_subplot(111, projection='3d')
-        # ax.set_xlabel('X')
-        # ax.set_ylabel('Y')
-        # ax.set_zlabel('Z')
-        # for i in range(15):
-        #     point = checkboard_centers[:,:,i]
-        #     ax.plot(point[0], point[1], point[2], 'ro')
-        # plt.show()
+                # Visualize plane in camera coordinate system
+                # Based on stack overflow tutorial: https://stackoverflow.com/questions/36060933/matplotlib-plot-a-plane-and-points-in-3d-simultaneously
+                # d = -np.dot(N,A)
+                # xx, yy = np.meshgrid(np.arange(-200, 200), np.arange(-200, 200))
+                # z = (d - N[0]*xx - N[1]*yy) / N[2]
+                # ax.plot_surface(xx,yy,z, alpha=0.3, color=[0,1,0])
+
+                rmat, tvec = (transforms[i]['rmat'], transforms[i]['tvec'])
+
+                obj_origin = np.array([0,0,0])
+                origin_in_camera = (np.matmul(rmat, obj_origin.reshape(-1, 1)) + tvec).reshape(-1)
+                ax.plot(origin_in_camera[0], origin_in_camera[1], origin_in_camera[2], 'ro')
+
+            ax.plot(xc, yc, zc, 'go', markersize=5)
+            # ax.plot(pt[0], pt[1], pt[2], 'bo', markersize=5)
+            ax.set_box_aspect([1,1,1])
+            set_axes_equal(ax)
+            
+            d = -np.dot(point, normal)
+            xx, yy = np.meshgrid(np.arange(-150,50), np.arange(-100, 100))
+            z = (-normal[0] * xx - normal[1] * yy - d) * 1. / normal[2]
+            ax.plot_surface(xx, yy, z, alpha=0.2, color=[1,0,0])
+
+
+            plt.show()
+        visualize_planes()
 
         
-        # Determine the least squares circle from these camera coordinate locations
+
 
 
     # -------------------- Translation stage --------------------
@@ -407,11 +505,13 @@ def calibrate(save_intrinsics=True, save_extrinsics=True):
     # if (save_extrinsics): calibrate_extrinsic_translation(front_path, back_path)
 
 
+
+
     # -------------------- Rotation stage --------------------
     # Find the axis of rotation of the rotation stage using the least squares circle
     # of the checkerboard origins of the rotated views   of the calibration plane on the rotation stage 
     if (save_extrinsics): calibrate_extrinsic_rotation()
-    
+
 
 
 '''
@@ -439,7 +539,6 @@ def reconstruction():
         return point
 
 
-
     # l_f : 1x3, f->q (magnitude = distance to image plane from f)
     # r : scalar, IOR
     def compute_nf(c, f, b, l_f, r):
@@ -455,12 +554,10 @@ def reconstruction():
 
 
 
-
 def main():
     # gen_backdrop_images()
 
     calibrate()
-
 
     # determine_backdrop_position()
 
