@@ -532,14 +532,32 @@ FRONT_DIR, BACK_DIR = ("front", "back")
 
 def reconstruction():
     # ---------------------------- Auxiliary ----------------------------
+    # rmat: 3x3
+    # tvec: 3x1, but reshape just in case
+    # Returns: 3x1
+    def to_camera_point(point, rmat, tvec):
+        converted = np.matmul(rmat, point.reshape(-1,1)) + tvec.reshape(-1,1)
+
+    # rmat: 3x3
+    # tvec: 3x1, but reshape just in case
+    # Returns: 3x1
+    def to_view_point(point, rmat, tvec):
+        converted = np.matmul(rmat.T, point.reshape(-1, 1) - tvec.reshape(-1, 1))
+        return converted
 
     def to_camera(img, rmat, tvec):
-            converted = np.matmul(rmat, img.T).T + tvec.reshape(-1)
-            return converted
+        rows, cols, depth = img.shape
+        flat = img.reshape(rows*cols, -1)
+        rotated = (np.matmul(rmat, flat.T).T).reshape(rows, cols, -1)
+        translated = rotated + tvec.reshape(-1)
+        return translated
 
-    def to_space(img, rmat, tvec):
-        converted = np.matmul(rmat.T, (img - tvec.reshape(-1)).T).T
-        return converted
+    def to_view(img, rmat, tvec):
+        rows, cols, depth = img.shape
+        flat = img.reshape(rows*cols, -1)
+        translated = flat - tvec.reshape(-1,1)
+        rotated = np.matmul(rmat.T, translated.T).T.reshape(rows, cols, -1)
+        return rotated
 
     def get_c_world(rmat, tvec):
         return np.matmul(-rmat.T, tvec)
@@ -619,22 +637,37 @@ def reconstruction():
 
     # Perform depth sampling with respect to the reference camera
     def driver():
+
+        # For a given camera, where q = (r,c), Lb = L(q) = (r_back(r,c) r_front(r,c))
         # We will commonly express computations in the coordinate space of the front frame
         # So we'll need to convert the back backdrop positions into the coordinate space of the front
-        r_front = determine_backdrop_position(ROTATED_DIRS[0], FRONT_DIR) 
-        r_back  = determine_backdrop_position(ROTATED_DIRS[0], BACK_DIR) 
-        r_back = to_space(to_camera(r_back, rmat_back, tvec_back), rmat_front, tvec_front)
+        ref_r_front = determine_backdrop_position("0", FRONT_DIR) 
+        ref_r_back = to_view(to_camera(determine_backdrop_position("0", BACK_DIR), rmat_back, tvec_back), rmat_front, tvec_front)
 
         ref_rmat, ref_tvec = (rotation_transforms["0"]['rmat'], rotation_transforms["0"]['tvec'])
         ref_c = get_c_world(ref_rmat, ref_tvec)
         ref_Q = get_q_world((1668, 2388), ref_rmat, ref_tvec)
 
+        # Pre-compute L_v(q) for the remaining cameras (validation camera views v)
+        # We also need image pixels -> world positions for each of the views
+        L_v = {}
+        view_Q = {}
+        for view in ROTATED_DIRS:
+            if view == "0": continue  
+
+            view_r_front = determine_backdrop_position(view, FRONT_DIR)
+            view_r_back = to_view(to_camera(determine_backdrop_position(view, BACK_DIR), rmat_back, tvec_back), rmat_front, tvec_front)
+            L_v[view] = {"view_r_front":view_r_front, "view_r_back":view_r_back}
+
+            view_rmat, view_tvec = (rotation_transforms[view]['rmat'], rotation_transforms[view]['tvec'])
+            view_Q[view] = get_q_world((1668, 2388), view_rmat, view_tvec)
+        
+
         # Iterate over pixels in image
         for y in range(CROPPED_IMG['rmin'], CROPPED_IMG['rmax']):
             for x in range(CROPPED_IMG['cmin'], CROPPED_IMG['cmax']):
-
     
-                Lb_ref = (r_back[y,x], r_front[y,x])    # Lb1 of the reference camera
+                Lb_ref = (ref_r_back[y,x], ref_r_front[y,x])    # Lb1 of the reference camera
                 Lf     = (ref_Q[y,x], ref_c)
                 b_samples = gen_samples(Lb_ref, B_LIMITS, N)
                 f_samples = gen_samples(Lf, F_LIMITS, N)
@@ -653,9 +686,35 @@ def reconstruction():
                             Evaluate light path consistency error for all cameras
                             NOTE: We omit the reference camera from consideration
                         '''
-                        for view in ROTATED_DIRS[1:]:
+                        E_s_ij = 0
+
+                        for view in ROTATED_DIRS:
+                            if view == "0": continue        # skip ref camera
+
                             view_rmat, view_tvec = (rotation_transforms[view]['rmat'], rotation_transforms[view]['tvec'])
                             view_c = get_c_world(view_rmat, view_tvec)
+
+                            # Project the surfel (specifically point f) into the image plane to get image point qc
+                            # The surfel (f, nf), b, Lb1, and Lf are represented in plane coordinate system of the reference view
+                            # projectPoints projects points from the plane coordinate system to the camera coordinate system
+                            # So we first need to get the surfel in the coordinate system of the current frame:
+                            # (ref world -> camera) -> this_world
+                            view_f = to_view_point(to_camera_point(f_i, ref_rmat, ref_tvec), view_rmat, view_tvec).reshape(-1,3)
+                            # NOTE: Need to convert rmat to rvec
+                            q_c_x, q_c_y = (cv2.projectPoints(view_f.astype(np.float32), cv2.Rodrigues(view_rmat)[0], view_tvec, mtx, dist)[0].astype(int).reshape(1,2))[0]
+
+                            # Query the initial light ray for this view
+                            Lb_j_c = (L_v[view]['view_r_back'][q_c_y, q_c_x], L_v[view]["view_r_back"][q_c_y, q_c_x])
+
+                            # Query the final ray
+                            Lf_i_c = (view_Q[q_c_y, q_c_x], view_c)
+
+                            # Evaluate the reconstruction error e_c_s_ij
+                            
+                            
+
+
+
 
 
         

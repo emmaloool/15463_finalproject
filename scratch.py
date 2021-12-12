@@ -1,5 +1,6 @@
 import numpy as np
 from skimage import io
+import math
 
 import time, os, glob
 from PIL import Image, ImageFont, ImageDraw 
@@ -84,25 +85,73 @@ def main():
     #                   figuring out closest value
     # -------------------------------------------------------------------
 
-    A = np.ones((3,4)) 
-    B = np.ones((3,4)) * 3
-    C = np.ones((3,4)) * 10
-    D = np.ones((3,4)) * -np.inf
-    X = np.dstack((A,B,C,D))
+    # A = np.ones((3,4)) 
+    # B = np.ones((3,4)) * 3
+    # C = np.ones((3,4)) * 10
+    # D = np.ones((3,4)) * -np.inf
+    # X = np.dstack((A,B,C,D))
 
-    target = np.array([[0,3,12,18],
-                       [51,10,3,1],
-                       [-100, 10000, 21, 16]])#[-100, np.inf, np.nan, -np.inf]])
-    repeat_target = np.repeat(target[:,:,np.newaxis], 4, axis=-1)
-    # print(repeat_target)
-    print(repeat_target.shape)
+    # target = np.array([[0,3,12,18],
+    #                    [51,10,3,1],
+    #                    [-100, 10000, 21, 16]])#[-100, np.inf, np.nan, -np.inf]])
+    # repeat_target = np.repeat(target[:,:,np.newaxis], 4, axis=-1)
+    # # print(repeat_target)
+    # print(repeat_target.shape)
 
-    ids = (np.abs(X - repeat_target))
-    print(ids)
-    ids = np.nanargmin(ids, axis=-1)
-    print(ids)
-    values = X.flat[ids]
-    print(values)
+    # ids = (np.abs(X - repeat_target))
+    # print(ids)
+    # ids = np.nanargmin(ids, axis=-1)
+    # print(ids)
+    # values = X.flat[ids]
+    # print(values)
+
+
+    # blah = np.array([[1,2,3,-1,-1],[7,8,9,-3,-3]])
+    # zeros = np.zeros(blah.shape)
+    # print(cool.shape)
+    # print(cool)
+    # print(cool.T.shape)
+    # print(cool.T)
+    # supercool = cool.flatten().reshape(cool.shape[0] * cool.shape[1],3)
+    # # print(supercool.shape)
+    # # print(supercool)
+
+
+    # print(np.array([1,2,3]).reshape(-1))
+    # print(np.array([[1],[2],[3]]).reshape(-1))
+    # print(np.float32([10,20,30]))
+
+    example = np.array([[-1,0,0], [0,1,0], [0,0,-1]])
+    # example = np.dstack((example, example, example))
+
+
+    meh = np.array([[5,22,33,44,5], [7,7,7,7,7], [7,7,7,7,7], [5,22,33,44,5]])
+    zeros = np.zeros(meh.shape)
+    cool = np.dstack((meh, zeros,  np.ones(meh.shape) * 11))
+    # print("cool shape:" ,cool.shape, cool)
+
+    flat_cool = cool.reshape(5*4, -1)
+    # print("flat cool shape:", flat_cool.shape, flat_cool)
+
+    # result = np.zeros((4,5,3))
+    # for r in range(4):
+    #     for c in range(5):
+    #         result[r,c,:] = np.matmul(example, cool[r,c,:].reshape(-1,1)).reshape(-1,3)
+    # print(result) 
+
+    # print("example shape:" ,example.shape, example)
+    # print(cool - np.array([-10, -2, 0]))
+    # print("")
+
+    # print(np.matmul(example, flat_cool.T).T.reshape(4,5, -1))
+    # meh = np.indices((5,4)).transpose(1,2,0)
+    # meh = meh.reshape(5*4, 2)
+    # print(meh)
+
+    
+
+    
+
 
 
 
