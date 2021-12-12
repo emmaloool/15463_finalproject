@@ -652,11 +652,6 @@ def reconstruction():
     rotation_transforms = np.load("rotation_extrinsics.npz")['rotation_transforms']
     with np.load(os.path.join(BASEDIR, CALIB_DIR, "translation_extrinsics.npz")) as X:
         tvec_front, rmat_front, tvec_back, rmat_back = [X[i] for i in ('tvec_front', 'rmat_front', 'tvec_v_back', 'rmat_v_back')]
-    
-    # For the various rotated views, we will need to rotate them with respect
-    # to the axis of the rotation stage
-    # NOTE: Axis is represented in the camera coordinate system
-    rs_axis = find_rotation_axis()
 
     B_LIMITS = (0, 40)
     F_LIMITS = (-20, 20)
