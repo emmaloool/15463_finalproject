@@ -41,7 +41,7 @@ FRAME_OFFSET = {'h_tmin':700, 'h_tmax':1800, 'v_tmin':550, 'v_tmax':1300}
 FRAME_SKIP = 10 # frames skip every 10 
 
 CAPTURE_DIR = "capture"
-ROTATED_DIRS = ["0", "-30", "-20", "-10", "10", "20", "30"]
+ROTATED_DIRS = ["0", "neg30", "neg20", "neg10", "10", "20", "30"]
 FRONT_DIR, BACK_DIR = ("front", "back")
 
 
@@ -201,8 +201,8 @@ def determine_backdrop_position(view_dir, translate_dir):
         x_precise = x_precise_candidates.flat[x_precise_ids]
 
         x_precise = np.where(mask == 0, 0, x_precise)
-        plt.imshow(x_precise, cmap='gray')
-        plt.savefig(os.path.join(BASEDIR, CAPTURE_DIR, translate_dir + "_" + B_H_DIR + "_" + view_dir))
+        # plt.imshow(x_precise, cmap='gray')
+        # plt.savefig(os.path.join(BASEDIR, CAPTURE_DIR, translate_dir + "_" + B_H_DIR + "_" + view_dir))
         # plt.show()
 
         return x_precise
@@ -299,8 +299,8 @@ def determine_backdrop_position(view_dir, translate_dir):
         y_precise = y_precise_candidates.flat[y_precise_ids]
 
         y_precise = np.where(mask == 0, 0, y_precise)
-        plt.imshow(y_precise, cmap='gray')
-        plt.savefig(os.path.join(BASEDIR, CAPTURE_DIR, translate_dir + "_" + B_V_DIR + "_" + view_dir))
+        # plt.imshow(y_precise, cmap='gray')
+        # plt.savefig(os.path.join(BASEDIR, CAPTURE_DIR, translate_dir + "_" + B_V_DIR + "_" + view_dir))
         # plt.show()
 
         return y_precise
@@ -385,11 +385,6 @@ def calibrate(save_intrinsics=False, save_extrinsics=False):
         calibrate_extrinsic_translation()
         calibrate_extrinsic_rotation()
 
-
-    '''
-        Use rotated views to recover the object's axis of rotation
-    '''
-    rotation_transforms = np.load(os.path.join(BASEDIR, CALIB_DIR, "rotation_extrinsics.npz"), allow_pickle=True)['rotation_transforms']
     find_rotation_axis()
 
 
@@ -539,68 +534,59 @@ def find_rotation_axis():
 
         return point, normal, xs, ys, zs
     point, normal, xs, ys, zs = find_circle_plane()
-    
-    def get_axis():
-        # Axis is centered at the center of the circle
-        # and extends outward from the plane of the circle
-
-        pt = center + normal * 10      # arbitrary
-        # axis = pt - center
-        # axis = axis / np.linalg.norm(axis)
-        return pt
-
-    axis = get_axis()
         
-    def visualize_planes():
-        fig = plt.figure()
-        ax = fig.add_subplot(111, projection='3d')
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y')
-        ax.set_zlabel('Z')
+    # fig = plt.figure()
+    # ax = fig.add_subplot(111, projection='3d')
+    # ax.set_xlabel('X')
+    # ax.set_ylabel('Y')
+    # ax.set_zlabel('Z')
+
+    for view in ['neg60', 'neg50', 'neg40', 'neg30', 'neg20', 'neg10', '0', '10', '20', '30', '40', '50', '60']:
+    # for i in range(len(planes)):
+        # N, A = planes[i]
+        # N = N.flatten()
+        # A = A.flatten()
+
+        # Visualize plane in camera coordinate system
+        # Based on stack overflow tutorial: https://stackoverflow.com/questions/36060933/matplotlib-plot-a-plane-and-points-in-3d-simultaneously
+        # d = -np.dot(N,A)
+        # xx, yy = np.meshgrid(np.arange(-200, 200), np.arange(-200, 200))
+        # z = (d - N[0]*xx - N[1]*yy) / N[2]
+        # ax.plot_surface(xx,yy,z, alpha=0.3, color=[0,1,0])
+
+        rmat, tvec = (rotation_transforms[view]['rmat'], rotation_transforms[view]['tvec'])
+
+        if (view == '60'): marker = 'yo'
+        else: marker = 'ro'
+
+        obj_origin = np.array([0,0,0])
+        origin_in_camera = (np.matmul(rmat, obj_origin.reshape(-1, 1)) + tvec).reshape(-1)
+        # ax.plot(origin_in_camera[0], origin_in_camera[1], origin_in_camera[2], marker)
+
+    axis_pt = center + normal * 10      # arbitrary
+    ray = (axis_pt-center) / np.linalg.norm(axis_pt-center)
+    intersection = rp_intersect(normal, point, center, ray)
+
+    # ax.plot(intersection[0], intersection[1], intersection[2], 'bo', markersize=8)
+
+    # ax.plot(xc, yc, zc, 'go', markersize=5)
+    # # ax.plot(pt[0], pt[1], pt[2], 'bo', markersize=5)
+    # ax.set_box_aspect([1,1,1])
+    # set_axes_equal(ax)
     
-        for view in ['neg60', 'neg50', 'neg40', 'neg30', 'neg20', 'neg10', '0', '10', '20', '30', '40', '50', '60']:
-        # for i in range(len(planes)):
-            # N, A = planes[i]
-            # N = N.flatten()
-            # A = A.flatten()
+    d = -np.dot(point, normal)
+    xx, yy = np.meshgrid(np.arange(-200,100), np.arange(-50, 50))
+    z = (-normal[0] * xx - normal[1] * yy - d) * 1. / normal[2]
+    # ax.plot_surface(xx, yy, z, alpha=0.4, color=[0,0,1])
 
-            # Visualize plane in camera coordinate system
-            # Based on stack overflow tutorial: https://stackoverflow.com/questions/36060933/matplotlib-plot-a-plane-and-points-in-3d-simultaneously
-            # d = -np.dot(N,A)
-            # xx, yy = np.meshgrid(np.arange(-200, 200), np.arange(-200, 200))
-            # z = (d - N[0]*xx - N[1]*yy) / N[2]
-            # ax.plot_surface(xx,yy,z, alpha=0.3, color=[0,1,0])
+    # ax.plot([axis_pt[0], center[0]], [axis_pt[1], center[1]], [axis_pt[2], center[2]], linewidth=2)
+    # plt.show()
 
-            rmat, tvec = (rotation_transforms[view]['rmat'], rotation_transforms[view]['tvec'])
+    axis_direction = (intersection - center) / np.linalg.norm(intersection - center)
+    axis_center = intersection
 
-            if (view == '60'): marker = 'yo'
-            else: marker = 'ro'
+    return (axis_center, axis_direction)
 
-            obj_origin = np.array([0,0,0])
-            origin_in_camera = (np.matmul(rmat, obj_origin.reshape(-1, 1)) + tvec).reshape(-1)
-            ax.plot(origin_in_camera[0], origin_in_camera[1], origin_in_camera[2], marker)
-
-
-        ray = (axis-center) / np.linalg.norm(axis-center)
-        result = rp_intersect(normal, point, center, ray)
-        ax.plot(result[0], result[1], result[2], 'bo', markersize=8)
-
-        ax.plot(xc, yc, zc, 'go', markersize=5)
-        # ax.plot(pt[0], pt[1], pt[2], 'bo', markersize=5)
-        ax.set_box_aspect([1,1,1])
-        set_axes_equal(ax)
-        
-        d = -np.dot(point, normal)
-        xx, yy = np.meshgrid(np.arange(-200,100), np.arange(-50, 50))
-        z = (-normal[0] * xx - normal[1] * yy - d) * 1. / normal[2]
-        ax.plot_surface(xx, yy, z, alpha=0.4, color=[0,0,1])
-
-        ax.plot([axis[0], center[0]], [axis[1], center[1]], [axis[2], center[2]], linewidth=2)
-
-        plt.show()
-    visualize_planes()
-
-    # return axis
 
 
 
@@ -643,7 +629,7 @@ def reconstruction():
     def to_view(img, rmat, tvec):
         rows, cols, depth = img.shape
         flat = img.reshape(rows*cols, -1)
-        translated = flat - tvec.reshape(-1,1)
+        translated = flat - tvec.reshape(-1)
         rotated = np.matmul(rmat.T, translated.T).T.reshape(rows, cols, -1)
         return rotated
 
@@ -652,19 +638,32 @@ def reconstruction():
     
     # Gets coordinates for each image pixel coordinate
     def get_q_world(dim, rmat, tvec):
-        indices = np.float32(np.indices(dim[0],dim[1]).transpose(1,2,0).reshape(dim[0]*dim[1],2))
+        indices = np.float32(np.indices((dim[0],dim[1])).transpose(1,2,0).reshape(dim[0]*dim[1],2))
         undist = cv2.undistortPoints(indices, mtx, dist)
-        homogenous = cv2.convertPointsToHomogeneous(undist)
-        points = np.matmul(rmat.T, (homogenous - tvec.reshape(-1)).T).T
+        homogenous = np.squeeze(cv2.convertPointsToHomogeneous(undist))
+        inter = np.matmul(rmat.T, (homogenous - tvec.reshape(-1)).T)
+        points = (np.matmul(rmat.T, (homogenous - tvec.reshape(-1)).T).T).reshape(dim[0],dim[1],3)
         return points
 
     # ray = (start, end)
-    def gen_samples(ray, limits, n):
-        print("TODO")
+    def gen_samples(segment, limits, n):
+        start = segment[0].reshape(-1)
+        ray = (segment[1] - segment[0]).reshape(-1)
+        ray = ray / np.linalg.norm(ray)
+        skip = int(round((limits[1] - limits[0]) / n))
+        samples = []
+        for scale in range(limits[0], limits[1], skip): 
+            print(scale)
+            newray = start + ray * scale
+            samples.append(newray)
+        return samples
     
     # v: 3x1
     # n: 3x1
     def refract(v, n, from_a, to_a):
+        v = v.reshape(-1)
+        n = n.reshape(-1)
+
         a = from_a / to_a
         b = np.dot(v, n)
         scale = a*b - math.sqrt(1.0 - ((a**2) * (1.0 - b**2)))
@@ -688,7 +687,36 @@ def reconstruction():
         term = term / np.linalg.norm(term)
 
         n_f = ( r * np.linalg.norm(i * o) * term ) + ( ((r * np.dot(i, o)) - 1) * o )
-        return n_f / np.linalg.norm(nf)
+        return n_f / np.linalg.norm(n_f)
+
+    # Referenced: https://stackoverflow.com/questions/2259476/rotating-a-point-about-another-point-2d
+    def rotate_axis_pt(axis_center, axis_dir, angle, point):
+        print("axis_center", axis_center.shape)
+        print("axis_dir", axis_dir.shape)
+        print("point", point.shape)
+
+        rvec = axis_dir.reshape(-1,1) * np.radians(angle)
+        rmat = cv2.Rodrigues(rvec)[0]
+
+        # Subtract pivot, then perform rotation, before adding the center back
+        point = point.reshape(-1,1) - axis_center.reshape(-1,1)
+        converted = np.matmul(rmat, point.reshape(-1,1)) + axis_center.reshape(-1,1)
+        return converted
+
+    
+    # Referenced: https://stackoverflow.com/questions/2259476/rotating-a-point-about-another-point-2d
+    def rotate_axis(axis_center, axis_dir, angle, img):
+        rvec = axis_dir.reshape(-1,1) * np.radians(angle)
+        rmat = cv2.Rodrigues(rvec)[0]
+
+        # Subtract pivot, then perform rotation, before adding the center back
+        orig = img.shape
+        flat = img.reshape(orig[0] * orig[1], -1)
+        trans_img = flat - axis_center.reshape(-1)
+        rotated = np.matmul(rmat, trans_img.T).T
+        transformed = (img - axis_center.reshape(-1)).reshape(orig[0], orig[1], -1)
+        
+        return transformed
 
     # x, y: (1x3, 1x3)
     def shortest_dist(x, y):
@@ -697,12 +725,15 @@ def reconstruction():
         x1, x2 = (x1.reshape(-1), x2.reshape(-1))
         y1, y2 = (y1.reshape(-1), y2.reshape(-1))
 
+        print("x", (x2 - x1).shape)
+        print("y", (y2 - y1).shape)
+
         cross_diff = np.cross((x2 - x1), (y2 - y1))
         return np.abs(np.dot(y1 - x1, cross_diff)) / np.linalg.norm(cross_diff)
 
     # Assumes lf, lb, nf are represented in the same coordinate frame
     def evaluate_error(lf, lb, nf):
-        f_i, c = lf
+        f_i, c = (lf[0].reshape(-1,1), lf[1].reshape(-1,1))
         lf_as_vector = c - f_i
 
         # Derive the implied ray lm
@@ -711,6 +742,17 @@ def reconstruction():
         lm = (f_i, f_i + refract(lf_as_vector, nf, 1.0, M))
 
         return (shortest_dist(lm, lb) ** 2)
+
+    # NOTE: lf represented as a directional vector
+    def compute_depth(c, surfels):
+        c = c.reshape(1, -1)
+        points, normals = surfels
+        depths = np.zeros(points.shape)
+        for i in range(surfels.shape[0]):
+            for j in range(surfels.shape[1]):
+                depth = (points[i,j,:].reshape(1,-1) - c) / (normals.reshape(1,-1) / np.linalg.norm(normals.reshape(-1)))
+                depths[i,j,:] = depth.reshape(1, -1)
+        return depths
 
     '''
         ###############################################################
@@ -722,17 +764,10 @@ def reconstruction():
     with np.load(os.path.join(BASEDIR, CALIB_DIR, "intrinsics.npz")) as X:
         mtx, dist = [X[i] for i in ('mtx', 'dist')]
 
-    # Load rotation and translations transforms for rotated/translated views
-    rotation_transforms = np.load("rotation_extrinsics.npz")['rotation_transforms']
+    # Load translations transforms for translated views
+    # We'll use them to express each rotated view's front and back views in the same coordinate frame
     with np.load(os.path.join(BASEDIR, CALIB_DIR, "translation_extrinsics.npz")) as X:
-        tvec_front, rmat_front, tvec_back, rmat_back = [X[i] for i in ('tvec_front', 'rmat_front', 'tvec_v_back', 'rmat_v_back')]
-
-    B_LIMITS = (0, 40)
-    F_LIMITS = (-20, 20)
-
-    N = 10  # TODO: tune
-    M = 1.5 # TODO: restructure to estimate depth instead of using this constant
-
+        tvec_front, rmat_front, tvec_back, rmat_back = [X[i] for i in ('tvec_front', 'rmat_front', 'tvec_back', 'rmat_back')]
 
     '''
         ###############################################################
@@ -750,125 +785,140 @@ def reconstruction():
         So we give more weight to sampling behind the rotation stage.
     '''
 
+    B_LIMITS = (0, 40)
+    F_LIMITS = (-20, 20)
+
+    N = 1  # TODO: tune
+    M = 1.5 # TODO: restructure to estimate depth instead of using this constant
+
+    # ---------- Reference camera: rotated view 0 degrees, expressed in front plane coordinate frame ----------
     # For a given camera, where q = (r,c), Lb = L(q) = (r_back(r,c) r_front(r,c))
     # We will commonly express computations in the coordinate space of the front frame
     # So we'll need to convert the back backdrop positions into the coordinate space of the front
-    ref_r_front = determine_backdrop_position("0", FRONT_DIR) 
-    ref_r_back = to_view(to_camera(determine_backdrop_position("0", BACK_DIR), rmat_back, tvec_back), rmat_front, tvec_front)
 
-    ref_rmat, ref_tvec = (rotation_transforms["0"]['rmat'], rotation_transforms["0"]['tvec'])
-    ref_c = get_c_world(ref_rmat, ref_tvec)
-    ref_Q = get_q_world((1668, 2388), ref_rmat, ref_tvec)
+    # ref_r_front = determine_backdrop_position("0", FRONT_DIR) 
+    # ref_r_back = to_view(to_camera(determine_backdrop_position("0", BACK_DIR), rmat_back, tvec_back), rmat_front, tvec_front)
+
+    ref_rmat, ref_tvec = (rmat_front, tvec_front)
+    ref_c = np.array([[0,0,0]]) #get_c_world(ref_rmat, ref_tvec)
+    ref_Q = to_camera(get_q_world((1668, 2388), ref_rmat, ref_tvec), ref_rmat, ref_tvec)
+
+    '''  Use rotated views to recover the object's axis of rotation '''
+    axis_center, axis_dir = find_rotation_axis()
+    print("############ ROTATION AXIS = ", axis_center, axis_dir, "############")
 
     # Pre-compute L_v(q) for the remaining cameras (validation camera views v)
     # We also need image pixels -> world positions for each of the views
-    L_v = {}
-    view_Q = {}
-    for view in ROTATED_DIRS:
-        if view == "0": continue  
+    VIEW_WORLD_PTS = {}
+    for view in [[0, "0"], [-10, "neg10"], [-20, "neg20"], [-30, "neg30"], [10, "10"], [20, "20"], [30, "30"]]:
+        angle, dir = view
 
-        view_r_front = determine_backdrop_position(view, FRONT_DIR)
-        view_r_back = to_view(to_camera(determine_backdrop_position(view, BACK_DIR), rmat_back, tvec_back), rmat_front, tvec_front)
-        L_v[view] = {"view_r_front":view_r_front, "view_r_back":view_r_back}
+        view_front = to_camera(determine_backdrop_position(dir, FRONT_DIR), rmat_front, tvec_front)
+        view_back  = to_camera(determine_backdrop_position(dir, BACK_DIR), rmat_back, tvec_back)
+        
+        world_front = rotate_axis(axis_center, axis_dir, angle, view_front)
+        world_back = rotate_axis(axis_center, axis_dir, angle,  view_back)
 
-        view_rmat, view_tvec = (rotation_transforms[view]['rmat'], rotation_transforms[view]['tvec'])
-        view_Q[view] = get_q_world((1668, 2388), view_rmat, view_tvec)
-    
-
-
-    # Store a surfel for each pixel in the image
-    surfel_points = np.zeros((CROPPED_IMG['rmax'] - CROPPED_IMG['rmin'],
-                              CROPPED_IMG['cmax'] - CROPPED_IMG['cmin'],
-                              3))
-    surfel_normals =  np.zeros((CROPPED_IMG['rmax'] - CROPPED_IMG['rmin'],
-                                CROPPED_IMG['cmax'] - CROPPED_IMG['cmin'],
-                                3))
-
-    # Iterate over pixels in image
-    for y in range(CROPPED_IMG['rmin'], CROPPED_IMG['rmax']):
-        for x in range(CROPPED_IMG['cmin'], CROPPED_IMG['cmax']):
-            y_img = y - CROPPED_IMG['rmin']
-            x_img = x - CROPPED_IMG['cmin']
+        VIEW_WORLD_PTS[dir] = {"front":world_front, "back":world_back}
 
 
-            Lb_ref = (ref_r_back[y,x], ref_r_front[y,x])    # Lb1 of the reference camera
-            Lf     = (ref_Q[y,x], ref_c)
-            b_samples = gen_samples(Lb_ref, B_LIMITS, N)
-            f_samples = gen_samples(Lf, F_LIMITS, N)
+    '''
+        Main depth sampling algorithm
+        For each pixel in the image, we aspire to get the best surfel (point-normal)
+        combination that will allow us to get depth of the point on the object that projects through the pixel
+    '''
+    def depth_sample(): 
 
-            '''
-                Perform 3D search along samples of b,f positions
-                Iteratively keep track of best error/surfel pair, where surfel = (f_i, nf)
-                NOTE: will store f_i, nf in the coordinates of the reference coordinate frame
-            '''
-            best_error = np.inf
-            best_surfel = (Lf[0], nf)
+        # Store a surfel for each pixel in the image
+        surfel_points  = np.zeros((ROWS, COLS, 3))
+        surfel_normals = np.zeros((ROWS, COLS, 3))
 
-            for j in range(len(b_samples)):
-                for i in range(len(f_samples)):
-                    b_j, f_i = (b_samples[j], f_samples[i])
+        # Iterate over pixels in image
+        for y in range(ROWS): #for img_y in range(ROWS):
+            for x in range(COLS):   #for img_x in range(COLS):
 
-                    # Determine the normal n_f in the reference view's coordinate frame
-                    nf = compute_nf(ref_c, f_i, b_j, (Lf[1] - Lf[0]), M)
+                # NOTE: Rays are represented as pairs of points (start, end)
+                # Lb_ref = (ref_r_back[y,x], ref_r_front[y,x])    # Lb1 of the reference camera
+                # Lf     = (ref_Q[y,x], ref_c.reshape(-1))
 
-                    '''
-                        Evaluate light path consistency error for all cameras
-                        NOTE: We omit the reference camera from consideration
-                    '''
-                    E_s_ij = 0      # error across all validation view cameras
+                Lb_ref = (VIEW_WORLD_PTS["0"]["back"][y,x], VIEW_WORLD_PTS["0"]["front"][y,x])    # Lb1 of the reference camera
+                Lf     = (ref_Q[y,x], ref_c.reshape(-1))
 
-                    for view in ROTATED_DIRS:
-                        if view == "0": continue        # skip ref camera
+                b_samples = gen_samples(Lb_ref, B_LIMITS, N)
+                f_samples = gen_samples(Lf, F_LIMITS, N)
 
-                        view_rmat, view_tvec = (rotation_transforms[view]['rmat'], rotation_transforms[view]['tvec'])
-                        view_c = get_c_world(view_rmat, view_tvec)
+                '''
+                    Perform 3D search along samples of b,f positions
+                    Iteratively keep track of best error/surfel pair, where surfel = (f_i, nf)
+                    NOTE: will store f_i, nf in the coordinates of the reference coordinate frame
+                '''
+                best_error = np.inf
+                best_surfel = (np.array(([0,0,0])), np.array(([0,0,0])))
 
-                        # Project the surfel (specifically point f) into the image plane to get image point qc
-                        # The surfel (f, nf), b, Lb1, and Lf are represented in plane coordinate system of the reference view
-                        # projectPoints projects points from the plane coordinate system to the camera coordinate system
-                        # So we first need to get the surfel in the coordinate system of the current frame:
-                        # (ref world -> camera) -> this_world
-                        view_f = to_view_point(to_camera_point(f_i, ref_rmat, ref_tvec), view_rmat, view_tvec).reshape(-1,3)
-                        # NOTE: Need to convert rmat to rvec
-                        q_c_x, q_c_y = (cv2.projectPoints(view_f.astype(np.float32), cv2.Rodrigues(view_rmat)[0], view_tvec, mtx, dist)[0].astype(int).reshape(1,2))[0]
+                for j in range(len(b_samples)):
+                    for i in range(len(f_samples)):
+                        print("----------------- x", x, "y", y, "i", i, "j", j, "-----------------")
 
-                        # Query the initial light ray for this view
-                        Lb_j_c = (L_v[view]['view_r_back'][q_c_y, q_c_x], L_v[view]["view_r_back"][q_c_y, q_c_x])
+                        b_j, f_i = (b_samples[j], f_samples[i])
 
-                        # Query the final ray
-                        Lf_i_c = (view_f, view_c) # (view_Q[q_c_y, q_c_x], view_c)
+                        # Determine the normal n_f in the reference view's coordinate frame
+                        nf = compute_nf(ref_c, f_i, b_j, (Lf[1] - Lf[0]), M)
 
-                        # Get nf expressed in the camera's world coordinate frame
-                        view_nf = to_view_vector(to_camera_vector(nf, ref_rmat))
+                        '''
+                            Evaluate light path consistency error for all cameras
+                            NOTE: We omit the reference camera from consideration
+                        '''
+                        E_s_ij = 0      # error across all validation view cameras
 
-                        # PROBABLY WRONG - we don't need to recompute, we're just evaluating accuracy of nf at sample location
-                        # view_b = to_view_point(to_camera_point(b_j, ref_rmat, ref_tvec), view_rmat, view_tvec).reshape(-1,3)
-                        # view_nf = compute_nf(view_c, view_f, view_b, (Lf_i_c[1] - Lf_i_c[0]), M)
+                        for angle, view in [[-10, "neg10"], [-20, "neg20"], [-30, "neg30"], [10, "10"], [20, "20"], [30, "30"]]:
+                            if (angle == 0): continue;   # skip reference camera
 
-                        # Evaluate the reconstruction error e_c_s_ij
-                        e_c_s_ij = evaluate_error(Lf_i_c, Lb_j_c, view_nf)
-                        E_s_ij += e_c_s_ij
-                    
-                    if (E_s_ij < best_error):
-                        best_surfel = (f_i, nf)
-            
-            surfel_points[y_img,x_img,:] = best_surfel[0].reshape(-1,3)
-            surfel_points[y_img,x_img,:] = best_surfel[1].reshape(-1,3)
+                            view_c = rotate_axis_pt(axis_center, axis_dir, angle, ref_c.reshape(-1,1))
+                            view_f = rotate_axis_pt(axis_center, axis_dir, angle, f_i.reshape(-1,1))
 
-    np.savez("surfels.npz", points=surfel_points, normals=surfel_normals)    
-    return surfel_points, surfel_normals
+                            # Project the surfel (specifically point f but from the perspective of the validation camera) into the image plane to get image point qc
+                            q_c_x, q_c_y = (cv2.projectPoints(view_c.astype(np.float32), cv2.Rodrigues(ref_rmat)[0], ref_tvec, mtx, dist)[0].astype(int).reshape(1,2))[0]
+                            # Need to acount for cropped image coordinates
+                            q_c_x = np.clip(q_c_x - IMG_OFFSET['col'], 0, COLS-1)
+                            q_c_y = np.clip(q_c_y - IMG_OFFSET['row'], 0, ROWS-1)
+
+                            # Then we can use our per-view backdrop lookup map to get the correct positions of the points in that view's camera coordinate frame
+
+                            # Query the initial light ray for this view
+                            Lb_j_c = (VIEW_WORLD_PTS[view]["back"][q_c_y, q_c_x], VIEW_WORLD_PTS[view]["front"][q_c_y, q_c_x])
+
+                            # Query the final ray
+                            Lf_i_c = (view_f, view_c) # (view_Q[q_c_y, q_c_x], view_c)
+
+                            # Get nf expressed in the validation camera's coordinate frame
+                            view_nf = rotate_axis_pt(axis_center, axis_dir, angle, nf)
+
+                            # Evaluate the reconstruction error e_c_s_ij
+                            e_c_s_ij = evaluate_error(Lf_i_c, Lb_j_c, view_nf)
+                            E_s_ij += e_c_s_ij
+                        
+                        if (E_s_ij < best_error):
+                            best_surfel = (f_i, nf)
+
+                        print(" ENDS HERE ")
+                        break;
+                
+                surfel_points[y,x,:] = best_surfel[0].reshape(-1,3)
+                surfel_points[y,x,:] = best_surfel[1].reshape(-1,3)
+
+        # np.savez("surfels.npz", points=surfel_points, normals=surfel_normals)    
+        # return surfel_points, surfel_normals
+
+    depth_sample()
 
 
 def main():
     start = time.time()
+
     # gen_backdrop_images()
-
-    for trans in ["front", "back"]:
-        for rotation in ["0", "neg30", "neg20", "neg10", "10", "20", "30"]:
-            determine_backdrop_position(rotation,trans)
-
     # calibrate()
-    # reconstruction()
+
+    reconstruction()
 
     end = time.time()
     print("*** Script duration: " + str(end - start) + " ***")
