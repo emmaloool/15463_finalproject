@@ -178,6 +178,16 @@ def determine_backdrop_position(view_dir, translate_dir):
             plt.show()
 
             x_precise_t = np.where((I_prime_x_t0 > 0.0) & (I_prime_x_t1 < 0.0), x_interpolated_t, x_precise_t)
+
+            min, max = (np.min(x_interpolated_t), np.max(np.ma.masked_invalid(x_precise_candidates)))
+            prime_min, prime_max = (np.min(I_prime_x), np.max(np.ma.masked_invalid(I_prime_x)))
+            # fig, ax = plt.subplots()
+            plt.subplot(1,2,1)
+            plt.imshow(x_interpolated_t, cmap='gray')
+            plt.subplot(1,2,2)
+            plt.imshow(x_precise_t, cmap='gray')
+            plt.show()
+
             
             x_precise_candidates[:,:,t] = x_precise_t
 
@@ -315,7 +325,7 @@ dX = 230.0 #calibration plane length in x direction (in mm)
 dY = 160.0 #calibration plane length in y direction (in mm)
 dW2 = (8, 8) #window size finding ground plane corners
 
-def calibrate(save_intrinsics=True, save_extrinsics=True): 
+def calibrate(save_intrinsics=False, save_extrinsics=False): 
     
     '''
         INTRINSIC CALIBRATION
@@ -326,7 +336,7 @@ def calibrate(save_intrinsics=True, save_extrinsics=True):
         np.savez(os.path.join(BASEDIR, CALIB_DIR, "intrinsics.npz"), mtx=mtx,
                                                                      dist=dist)
     
-    # if (save_intrinsics): calibrate_intrinsic()
+    if (save_intrinsics): calibrate_intrinsic()
     with np.load(os.path.join(BASEDIR, CALIB_DIR, "intrinsics.npz")) as X:
         mtx, dist = [X[i] for i in ('mtx', 'dist')]
         
@@ -340,43 +350,51 @@ def calibrate(save_intrinsics=True, save_extrinsics=True):
 
         So long as we move the screen on the translation stage to fixed positions
         for the front and back screens, the extrinsic calibration process needs only
-        to be computed once and shared over the seven different rotated views
+        to be computed once and shared over the seven different rotated views.
+
+        Since the plane has the same dimensions as the screen for calibration
+        (i.e. same 4 corners) as in data capture (i.e. fix front and back position
+        to two places where we captured in calibration), we can use the calibration image
+        to get extrinsic parameters for the front/back planes.
+
+        Use first image of the front and back screen captures
+        WLOG will always collect data for straight-on view (i.e. rotation = 0)
 
     '''
-    def calibrate_extrinsic_translation(screen1_path, screen2_path):
-        tvec_front, rmat_front = calibrateExtrinsic(screen1_path, mtx, dist, dX, dY)
-        tvec_back, rmat_back = calibrateExtrinsic(screen2_path, mtx, dist, dX, dY)
+    def calibrate_extrinsic_translation():
+        front_path = os.path.join(BASEDIR, CALIB_DIR, "front.JPG")
+        back_path = os.path.join(BASEDIR, CALIB_DIR, "back.JPG")
+        tvec_front, rmat_front = calibrateExtrinsic(front_path, mtx, dist, dX, dY)
+        tvec_back, rmat_back = calibrateExtrinsic(back_path, mtx, dist, dX, dY)
 
         np.savez(os.path.join(BASEDIR, CALIB_DIR, "translation_extrinsics.npz"), 
-                                                                     tvec_front=tvec_front, 
-                                                                     rmat_front=rmat_front, 
-                                                                     tvec_back=tvec_back,
-                                                                     rmat_back=rmat_back)
+                                                    tvec_front=tvec_front, 
+                                                    rmat_front=rmat_front, 
+                                                    tvec_back=tvec_back,
+                                                    rmat_back=rmat_back)
+
 
     # TODO: cleanup organization/naming scheme of rotation calibration images
     # Also make corresponding changes in find_rotation_axis()
     def calibrate_extrinsic_rotation():
         rotation_transforms = {}
-        for view in ['-60', '-50', '-40', '-30', '-20', '-10', '0', '10', '20', '30', '40', '50', '60']:
+        for view in ['neg60', 'neg50', 'neg40', 'neg30', 'neg20', 'neg10', '0', '10', '20', '30', '40', '50', '60']:
             rotated_path = os.path.join(BASEDIR, CALIB_DIR, view + ".JPG")
             tvec, rmat = calibrateExtrinsic(rotated_path, mtx, dist, dX, dY)
             rotation_transforms[view] = {'rmat':rmat, 'tvec':tvec}
-        np.savez("rotation_extrinsics.npz", rotation_transforms=rotation_transforms)
+        np.savez(os.path.join(BASEDIR, CALIB_DIR, "rotation_extrinsics.npz"), 
+                                                    rotation_transforms=rotation_transforms)
         
-
-    # -------------------- Translation stage --------------------
-    # Use first image of the front and back screen captures
-    # WLOG will always collect data for straight-on view (i.e. rotation = 0)
-    front_path = os.path.join(BASEDIR, CALIB_DIR, "front.JPG")
-    back_path = os.path.join(BASEDIR, CALIB_DIR, "back.JPG")
-    # if (save_extrinsics): calibrate_extrinsic_translation(front_path, back_path)
-
-    # -------------------- Rotation stage --------------------
-    # Find the axis of rotation of the rotation stage using the least squares circle
-    # of the checkerboard origins of the rotated views   of the calibration plane on the rotation stage 
-    # if (save_extrinsics): calibrate_extrinsic_rotation()
+    if (save_extrinsics): 
+        calibrate_extrinsic_translation()
+        calibrate_extrinsic_rotation()
 
 
+    '''
+        Use rotated views to recover the object's axis of rotation
+    '''
+    rotation_transforms = np.load(os.path.join(BASEDIR, CALIB_DIR, "rotation_extrinsics.npz"), allow_pickle=True)['rotation_transforms']
+    find_rotation_axis()
 
 '''
 Reconstruction
@@ -397,59 +415,58 @@ def find_rotation_axis():
         point = o + ((c - np.dot(N, o)) / np.dot(N, d)) * d
         return point
 
+    rotation_transforms = dict(np.load(os.path.join(BASEDIR, CALIB_DIR, "rotation_extrinsics.npz"), allow_pickle=True))
+    rotation_transforms = dict(rotation_transforms['rotation_transforms'].item())
+    # print(rotation_transforms)
+
     def get_rot_plane_eqs():
         planes = []
-        for i in range(15):
-            rotated_path = os.path.join(BASEDIR, CALIB_DIR, str(i+1) + ".JPG")
-            I = rgb2gray(io.imread(rotated_path))
+        # for view in ['neg60', 'neg50', 'neg40', 'neg30', 'neg20', 'neg10', '0', '10', '20', '30', '40', '50', '60']:
 
-            rmat, tvec = (transforms[i]['rmat'], transforms[i]['tvec'])
+        #     # rmat, tvec = (transforms[i]['rmat'], transforms[i]['tvec'])
 
-            # Cast rays from image corners -> plane (represented in plane coordinate frame)
-            a_ray = np.matmul(rmat.T, np.squeeze(200*pixel2ray(np.float32([[0,0]]), mtx, dist)).T)
-            b_ray = np.matmul(rmat.T, np.squeeze(200*pixel2ray(np.float32([[I.shape[1], 0]]), mtx, dist)).T)
-            c_ray = np.matmul(rmat.T, np.squeeze(200*pixel2ray(np.float32([[0, I.shape[0]]]), mtx, dist)).T)
-            d_ray = np.matmul(rmat.T, np.squeeze(200*pixel2ray(np.float32([[I.shape[1], I.shape[0]]]), mtx, dist)).T)
-            a_ray, b_ray, c_ray, d_ray = (a_ray.reshape(-1, 1), 
-                                            b_ray.reshape(-1, 1),
-                                            c_ray.reshape(-1, 1),
-                                            d_ray.reshape(-1, 1))
-            camera_origin = np.matmul(rmat.T, np.array([[0,0,0]]).T - tvec)
-            # Get points of intersection with plane in plane coordinate space
-            A,B,C,D = (z0_ray_plane_intersection(camera_origin, a_ray),
-                        z0_ray_plane_intersection(camera_origin, b_ray),
-                        z0_ray_plane_intersection(camera_origin, c_ray),
-                        z0_ray_plane_intersection(camera_origin, d_ray))
-            # Convert points back in the camera coordinate system 
-            A,B,C,D = (np.matmul(rmat, A) + tvec,
-                        np.matmul(rmat, B) + tvec,
-                        np.matmul(rmat, C) + tvec,
-                        np.matmul(rmat, D) + tvec)
-            N = np.cross((B-A).T, (D-B).T)
-            N = N / np.linalg.norm(N)
-            planes.append((N, A))
-        np.savez("planes.npz", planes=planes)
+        #     # Cast rays from image corners -> plane (represented in plane coordinate frame)
+        #     a_ray = np.matmul(rmat.T, np.squeeze(200*pixel2ray(np.float32([[0,0]]), mtx, dist)).T)
+        #     b_ray = np.matmul(rmat.T, np.squeeze(200*pixel2ray(np.float32([[I.shape[1], 0]]), mtx, dist)).T)
+        #     c_ray = np.matmul(rmat.T, np.squeeze(200*pixel2ray(np.float32([[0, I.shape[0]]]), mtx, dist)).T)
+        #     d_ray = np.matmul(rmat.T, np.squeeze(200*pixel2ray(np.float32([[I.shape[1], I.shape[0]]]), mtx, dist)).T)
+        #     a_ray, b_ray, c_ray, d_ray = (a_ray.reshape(-1, 1), 
+        #                                     b_ray.reshape(-1, 1),
+        #                                     c_ray.reshape(-1, 1),
+        #                                     d_ray.reshape(-1, 1))
+        #     camera_origin = np.matmul(rmat.T, np.array([[0,0,0]]).T - tvec)
+        #     # Get points of intersection with plane in plane coordinate space
+        #     A,B,C,D = (z0_ray_plane_intersection(camera_origin, a_ray),
+        #                 z0_ray_plane_intersection(camera_origin, b_ray),
+        #                 z0_ray_plane_intersection(camera_origin, c_ray),
+        #                 z0_ray_plane_intersection(camera_origin, d_ray))
+        #     # Convert points back in the camera coordinate system 
+        #     A,B,C,D = (np.matmul(rmat, A) + tvec,
+        #                 np.matmul(rmat, B) + tvec,
+        #                 np.matmul(rmat, C) + tvec,
+        #                 np.matmul(rmat, D) + tvec)
+        #     N = np.cross((B-A).T, (D-B).T)
+        #     N = N / np.linalg.norm(N)
+        #     planes.append((N, A))
+        # np.savez("planes.npz", planes=planes)
     # get_rot_plane_eqs()
-    
-    planes = np.load('planes.npz', allow_pickle=True)['planes']
-    transforms = np.load('transforms.npz', allow_pickle=True)['transforms']
+    # planes = np.load('planes.npz', allow_pickle=True)['planes']
 
     X = []
     Y = []
     Z = []
     points = []
-    for i in range(len(transforms)):
-        rmat, tvec = (transforms[i]['rmat'], transforms[i]['tvec'])
+    for view in ['neg60', 'neg50', 'neg40', 'neg30', 'neg20', 'neg10', '0', '10', '20', '30', '40', '50', '60']:
+        rmat, tvec = (rotation_transforms[view]['rmat'], rotation_transforms[view]['tvec'])
         obj_origin = np.array([0,0,0])
         origin_in_camera = (np.matmul(rmat, obj_origin.reshape(-1, 1)) + tvec).reshape(-1)
         X.append(origin_in_camera[0])
         Y.append(origin_in_camera[1])
         Z.append(origin_in_camera[2])
         points.append((origin_in_camera[0], origin_in_camera[1], origin_in_camera[2]))
-    
+        
     # Use least-squares fitting to find the equation of the circle
     # Code obtained from: https://stackoverflow.com/questions/15481242/python-optimize-leastsq-fitting-a-circle-to-3d-set-of-points/15786868
-    # TODO: Broken
     def find_circle_center():
         def calc_R(xc, yc, zc):
             """ calculate the distance of each 3D points from the center (xc, yc, zc) """
@@ -468,7 +485,9 @@ def find_rotation_axis():
         center, ier = optimize.leastsq(func, center_estimate)
         print("CENTER: ", center)
 
+
         xc, yc, zc = center
+        zc = np.mean(Z)
         Ri       = calc_R(xc, yc, zc)
         R        = np.mean(Ri)
         residu   = np.sum((Ri - R)**2)
@@ -477,6 +496,89 @@ def find_rotation_axis():
         return center
     center = find_circle_center()
     xc,yc,zc = center
+
+    # Least-squares circle fitting via finding the plane of the circle first
+    # Code obtained from the answer: https://stackoverflow.com/questions/15481242/python-optimize-leastsq-fitting-a-circle-to-3d-set-of-points/15786868
+    def other_circle_center():
+        # Fitting a plane first
+        # let the affine plane be defined by two vectors, 
+        # the zero point P0 and the plane normal n0
+        # a point p is member of the plane if (p-p0).n0 = 0 
+
+        dataTupel = zip(X,Y,Z)
+
+        def distanceToPlane(p0,n0,p):
+            return np.dot(np.array(n0),np.array(p)-np.array(p0))    
+
+        def residualsPlane(parameters,dataPoint):
+            px,py,pz,theta,phi = parameters
+            nx,ny,nz =math.sin(theta)*math.cos(phi),math.sin(theta)*math.sin(phi),math.cos(theta)
+            distances = [distanceToPlane([px,py,pz],[nx,ny,nz],[x,y,z]) for x,y,z in dataPoint]
+            return distances
+
+        estimate = [1900, 700, 335,0,0] # px,py,pz and zeta, phi
+        #you may automize this by using the center of mass data
+        # note that the normal vector is given in polar coordinates
+        bestFitValues, ier = optimize.leastsq(residualsPlane, estimate, args=(dataTupel))
+        xF,yF,zF,tF,pF = bestFitValues
+
+        point  = [xF,yF,zF]
+        normal = [math.sin(tF)*math.cos(pF),math.sin(tF)*math.sin(pF),math.cos(tF)]
+
+        # Fitting a circle inside the plane
+        #creating two inplane vectors
+        sArr=np.cross(np.array([1,0,0]),np.array(normal))#assuming that normal not parallel x!
+        sArr=sArr/np.linalg.norm(sArr)
+        rArr=np.cross(sArr,np.array(normal))
+        rArr=rArr/np.linalg.norm(rArr)#should be normalized already, but anyhow
+
+
+        def residualsCircle(parameters,dataPoint):
+            r,s,Ri = parameters
+            planePointArr = s*sArr + r*rArr + np.array(point)
+            distance = [ np.linalg.norm( planePointArr-np.array([x,y,z])) for x,y,z in dataPoint]
+            res = [(Ri-dist) for dist in distance]
+            return res
+
+        estimateCircle = [0, 0, 335] # px,py,pz and zeta, phi
+        bestCircleFitValues, ier = optimize.leastsq(residualsCircle, estimateCircle,args=(dataTupel))
+
+        rF,sF,RiF = bestCircleFitValues
+        print(bestCircleFitValues)
+
+        # Synthetic Data
+        centerPointArr=sF*sArr + rF*rArr + np.array(point)
+        synthetic=[list(centerPointArr+ RiF*math.cos(phi)*rArr+RiF*math.sin(phi)*sArr) for phi in np.linspace(0, 2*math.pi,50)]
+        [cxTupel,cyTupel,czTupel]=[ x for x in zip(*synthetic)]
+
+        ### Plotting
+        d = -np.dot(np.array(point),np.array(normal))# dot product
+        # create x,y mesh
+        xx, yy = np.meshgrid(np.linspace(2000,2200,10), np.linspace(540,740,10))
+        # calculate corresponding z
+        # Note: does not work if normal vector is without z-component
+        z = (-normal[0]*xx - normal[1]*yy - d)/normal[2]
+
+        # plot the surface, data, and synthetic circle
+        fig = plt.figure()
+        ax = fig.add_subplot(211, projection='3d')
+        ax.scatter(X, Y, Z, c='b', marker='o')
+        ax.plot_wireframe(xx,yy,z)
+        ax.set_xlabel('X Label')
+        ax.set_ylabel('Y Label')
+        ax.set_zlabel('Z Label')
+        bx = fig.add_subplot(212, projection='3d')
+        bx.scatter(X, Y, Z, c='b', marker='o')
+        bx.scatter(cxTupel,cyTupel,czTupel, c='r', marker='o')
+        bx.set_xlabel('X Label')
+        bx.set_ylabel('Y Label')
+        bx.set_zlabel('Z Label')
+        plt.show()
+
+    # center = other_circle_center()
+    # xc,yc,zc = center
+
+    
 
     # Identify plane fitting through the circle points, and extract its normal and a point on the plane
     # Code obtained from answer: https://stackoverflow.com/questions/20699821/find-and-draw-regression-plane-to-a-set-of-points/20700063#20700063
@@ -522,9 +624,9 @@ def find_rotation_axis():
         print("blah")
 
         pt = center + normal * 10      # arbitrary
-        axis = pt - center
-        axis = axis / np.linalg.norm(axis)
-        return axis
+        # axis = pt - center
+        # axis = axis / np.linalg.norm(axis)
+        return pt
 
     axis = get_axis()
         
@@ -535,10 +637,11 @@ def find_rotation_axis():
         ax.set_ylabel('Y')
         ax.set_zlabel('Z')
     
-        for i in range(len(planes)):
-            N, A = planes[i]
-            N = N.flatten()
-            A = A.flatten()
+        for view in ['neg60', 'neg50', 'neg40', 'neg30', 'neg20', 'neg10', '0', '10', '20', '30', '40', '50', '60']:
+        # for i in range(len(planes)):
+            # N, A = planes[i]
+            # N = N.flatten()
+            # A = A.flatten()
 
             # Visualize plane in camera coordinate system
             # Based on stack overflow tutorial: https://stackoverflow.com/questions/36060933/matplotlib-plot-a-plane-and-points-in-3d-simultaneously
@@ -547,11 +650,15 @@ def find_rotation_axis():
             # z = (d - N[0]*xx - N[1]*yy) / N[2]
             # ax.plot_surface(xx,yy,z, alpha=0.3, color=[0,1,0])
 
-            rmat, tvec = (transforms[i]['rmat'], transforms[i]['tvec'])
+            rmat, tvec = (rotation_transforms[view]['rmat'], rotation_transforms[view]['tvec'])
 
             obj_origin = np.array([0,0,0])
             origin_in_camera = (np.matmul(rmat, obj_origin.reshape(-1, 1)) + tvec).reshape(-1)
             ax.plot(origin_in_camera[0], origin_in_camera[1], origin_in_camera[2], 'ro')
+
+        ray = (axis-center) / np.linalg.norm(axis-center)
+        result = rp_intersect(normal, point, center, ray)
+        ax.plot(result[0], result[1], result[2], 'bo', markersize=8)
 
         ax.plot(xc, yc, zc, 'go', markersize=5)
         # ax.plot(pt[0], pt[1], pt[2], 'bo', markersize=5)
@@ -559,14 +666,16 @@ def find_rotation_axis():
         set_axes_equal(ax)
         
         d = -np.dot(point, normal)
-        xx, yy = np.meshgrid(np.arange(-150,50), np.arange(-100, 100))
+        xx, yy = np.meshgrid(np.arange(-200,100), np.arange(-50, 50))
         z = (-normal[0] * xx - normal[1] * yy - d) * 1. / normal[2]
-        ax.plot_surface(xx, yy, z, alpha=0.2, color=[1,0,0])
+        ax.plot_surface(xx, yy, z, alpha=0.4, color=[0,0,1])
+
+        ax.plot([axis[0], center[0]], [axis[1], center[1]], [axis[2], center[2]], linewidth=2)
 
         plt.show()
     visualize_planes()
 
-    return axis
+    # return axis
 
 
 
@@ -830,10 +939,9 @@ def main():
     # gen_backdrop_images()
 
     
-    determine_backdrop_position("0","front")
+    # determine_backdrop_position("0","front")
 
-
-    # calibrate()
+    calibrate()
     # reconstruction()
 
     end = time.time()
