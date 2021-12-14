@@ -497,88 +497,6 @@ def find_rotation_axis():
     center = find_circle_center()
     xc,yc,zc = center
 
-    # Least-squares circle fitting via finding the plane of the circle first
-    # Code obtained from the answer: https://stackoverflow.com/questions/15481242/python-optimize-leastsq-fitting-a-circle-to-3d-set-of-points/15786868
-    def other_circle_center():
-        # Fitting a plane first
-        # let the affine plane be defined by two vectors, 
-        # the zero point P0 and the plane normal n0
-        # a point p is member of the plane if (p-p0).n0 = 0 
-
-        dataTupel = zip(X,Y,Z)
-
-        def distanceToPlane(p0,n0,p):
-            return np.dot(np.array(n0),np.array(p)-np.array(p0))    
-
-        def residualsPlane(parameters,dataPoint):
-            px,py,pz,theta,phi = parameters
-            nx,ny,nz =math.sin(theta)*math.cos(phi),math.sin(theta)*math.sin(phi),math.cos(theta)
-            distances = [distanceToPlane([px,py,pz],[nx,ny,nz],[x,y,z]) for x,y,z in dataPoint]
-            return distances
-
-        estimate = [1900, 700, 335,0,0] # px,py,pz and zeta, phi
-        #you may automize this by using the center of mass data
-        # note that the normal vector is given in polar coordinates
-        bestFitValues, ier = optimize.leastsq(residualsPlane, estimate, args=(dataTupel))
-        xF,yF,zF,tF,pF = bestFitValues
-
-        point  = [xF,yF,zF]
-        normal = [math.sin(tF)*math.cos(pF),math.sin(tF)*math.sin(pF),math.cos(tF)]
-
-        # Fitting a circle inside the plane
-        #creating two inplane vectors
-        sArr=np.cross(np.array([1,0,0]),np.array(normal))#assuming that normal not parallel x!
-        sArr=sArr/np.linalg.norm(sArr)
-        rArr=np.cross(sArr,np.array(normal))
-        rArr=rArr/np.linalg.norm(rArr)#should be normalized already, but anyhow
-
-
-        def residualsCircle(parameters,dataPoint):
-            r,s,Ri = parameters
-            planePointArr = s*sArr + r*rArr + np.array(point)
-            distance = [ np.linalg.norm( planePointArr-np.array([x,y,z])) for x,y,z in dataPoint]
-            res = [(Ri-dist) for dist in distance]
-            return res
-
-        estimateCircle = [0, 0, 335] # px,py,pz and zeta, phi
-        bestCircleFitValues, ier = optimize.leastsq(residualsCircle, estimateCircle,args=(dataTupel))
-
-        rF,sF,RiF = bestCircleFitValues
-        print(bestCircleFitValues)
-
-        # Synthetic Data
-        centerPointArr=sF*sArr + rF*rArr + np.array(point)
-        synthetic=[list(centerPointArr+ RiF*math.cos(phi)*rArr+RiF*math.sin(phi)*sArr) for phi in np.linspace(0, 2*math.pi,50)]
-        [cxTupel,cyTupel,czTupel]=[ x for x in zip(*synthetic)]
-
-        ### Plotting
-        d = -np.dot(np.array(point),np.array(normal))# dot product
-        # create x,y mesh
-        xx, yy = np.meshgrid(np.linspace(2000,2200,10), np.linspace(540,740,10))
-        # calculate corresponding z
-        # Note: does not work if normal vector is without z-component
-        z = (-normal[0]*xx - normal[1]*yy - d)/normal[2]
-
-        # plot the surface, data, and synthetic circle
-        fig = plt.figure()
-        ax = fig.add_subplot(211, projection='3d')
-        ax.scatter(X, Y, Z, c='b', marker='o')
-        ax.plot_wireframe(xx,yy,z)
-        ax.set_xlabel('X Label')
-        ax.set_ylabel('Y Label')
-        ax.set_zlabel('Z Label')
-        bx = fig.add_subplot(212, projection='3d')
-        bx.scatter(X, Y, Z, c='b', marker='o')
-        bx.scatter(cxTupel,cyTupel,czTupel, c='r', marker='o')
-        bx.set_xlabel('X Label')
-        bx.set_ylabel('Y Label')
-        bx.set_zlabel('Z Label')
-        plt.show()
-
-    # center = other_circle_center()
-    # xc,yc,zc = center
-
-    
 
     # Identify plane fitting through the circle points, and extract its normal and a point on the plane
     # Code obtained from answer: https://stackoverflow.com/questions/20699821/find-and-draw-regression-plane-to-a-set-of-points/20700063#20700063
@@ -652,9 +570,13 @@ def find_rotation_axis():
 
             rmat, tvec = (rotation_transforms[view]['rmat'], rotation_transforms[view]['tvec'])
 
+            if (view == '60'): marker = 'yo'
+            else: marker = 'ro'
+
             obj_origin = np.array([0,0,0])
             origin_in_camera = (np.matmul(rmat, obj_origin.reshape(-1, 1)) + tvec).reshape(-1)
-            ax.plot(origin_in_camera[0], origin_in_camera[1], origin_in_camera[2], 'ro')
+            ax.plot(origin_in_camera[0], origin_in_camera[1], origin_in_camera[2], marker)
+
 
         ray = (axis-center) / np.linalg.norm(axis-center)
         result = rp_intersect(normal, point, center, ray)
