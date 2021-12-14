@@ -18,36 +18,36 @@ def blah():
                      [1,1,1,1],
                      [1,1,1,1]])
 
-    # meh = np.array([[1,2,3,4],
-    #                 [4,5,6,7],
-    #                 [7,8,9,10]])
+    meh = np.array([[1,2,3,4],
+                    [4,5,6,7],
+                    [7,8,9,10]])
 
-    # bleh = np.array([[1,4,9,16],
-    #                  [25,36,49,64],
-    #                  [81,100,121,132]])
+    bleh = np.array([[1,4,9,16],
+                     [25,36,49,64],
+                     [81,100,121,132]])
 
-    # sotrue = np.array([[10,20,30,40],
-    #                 [50,60,70,80],
-    #                 [90,100,110,120]])
+    sotrue = np.array([[10,20,30,40],
+                    [50,60,70,80],
+                    [90,100,110,120]])
 
 
     # -------------------------------------------------------------------
     #                   figuring out gradient across z-axis
     # -------------------------------------------------------------------
 
-    # blah = blah.flatten()
-    # meh = meh.flatten()
-    # bleh = bleh.flatten()
-    # sotrue = sotrue.flatten()
+    blah = blah.flatten()
+    meh = meh.flatten()
+    bleh = bleh.flatten()
+    sotrue = sotrue.flatten()
 
-    # e = np.dstack((blah, meh, bleh, sotrue))
-    # cool = np.dstack((blah, meh, bleh))
-    # other = np.dstack((meh, bleh, sotrue))
+    e = np.dstack((blah, meh, bleh, sotrue))
+    cool = np.dstack((blah, meh, bleh))
+    other = np.dstack((meh, bleh, sotrue))
 
-    # # # I' for meh
-    # print(np.squeeze(np.gradient(cool, axis=-1))[:,1].reshape((3,4)))
-    # print(np.gradient(e, axis=-1)[0][:,1].reshape((3,4)))
-    # print(((bleh - blah)/2).reshape((3,4)))
+    # # I' for meh
+    print(np.squeeze(np.gradient(cool, axis=-1))[:,1].reshape((3,4)))
+    print(np.gradient(e, axis=-1)[0][:,1].reshape((3,4)))
+    print(((bleh - blah)/2).reshape((3,4)))
     
 
     # # I' for bleh
@@ -150,14 +150,16 @@ def blah():
 
 def main():
 
-    old_base = "./old_capture/"
-    NEW = "../../../../capture"
+    blah()
+
+    # old_base = "./old_capture/"
+    # NEW = "../../../../capture"
 
     # convert -crop +1300+900 -crop -1375-825 1.jpg out.jpg
 
     # subprocess.call(shlex.split("cd old_capture/back/B_v/30/"), shell=True)
-    subprocess.call(shlex.split("pwd"), shell=True, cwd="./old_capture/back/B_v/30/")
-    subprocess.call(shlex.split("convert -crop +1300+900 1.JPG output.JPG"), shell=True, cwd="./old_capture/back/B_v/30/")
+    # subprocess.call(shlex.split("pwd"), shell=True, cwd="./old_capture/back/B_v/30/")
+    # subprocess.call(shlex.split("convert -crop +1300+900 1.JPG output.JPG"), shell=True, cwd="./old_capture/back/B_v/30/")
 
     
     # for trans in ["front", "back"]:
