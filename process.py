@@ -27,16 +27,22 @@ BACKDROP_HEIGHT, BACKDROP_WIDTH = (1668, 2388) # 1668 rows, 2388 columns
 Mapping image plane pixels (qx,qy) -> backdrop positions (rx,ry)
 NOTE: bounds are [min,max)
 '''
-IMAGE_DIR = "images"
-G_BLUR_SIGMA = 0.5
+G_BLUR_SIGMA = 0.25 #0.5
 
 '''
 Bounds for cropped image 
 Applicable + fixed for both vertical/horizontal directions, this cropping stays constant
 '''
+ROWS, COLS = (275, 317)
+H_FRAMES, V_FRAMES = (111, 76)
+IMG_OFFSET = {'col':1300, 'row':900}
+FRAME_OFFSET = {'h_tmin':700, 'h_tmax':1800, 'v_tmin':550, 'v_tmax':1300}
+FRAME_SKIP = 10 # frames skip every 10 
 
-CROPPED_IMG = {'cmin':0, 'cmax':2388, 'rmin':0, 'rmax':1668} # TODO adjust 
-FRAME = {'h_tmin':0, 'h_tmax':2388, 'v_tmin':0, 'v_tmax':1668}
+CAPTURE_DIR = "capture"
+ROTATED_DIRS = ["0", "-30", "-20", "-10", "10", "20", "30"]
+FRONT_DIR, BACK_DIR = ("front", "back")
+
 
 def gen_backdrop_images():
     backdropdir_path = os.path.join(BASEDIR, BACKDROP_DIR)
@@ -83,13 +89,6 @@ Determine a position on the monitor (r_x, r_y) for each pixel in the camera imag
 that indirectly projects through the center of the pixel
 '''
 def determine_backdrop_position(view_dir, translate_dir):
-    imgdir_path = os.path.join(BASEDIR, IMAGE_DIR, view_dir, translate_dir)
-    
-    # Parameters for cropped image boundaries
-    cmin, cmax, rmin, rmax = (CROPPED_IMG['cmin'], CROPPED_IMG['cmax'], CROPPED_IMG['rmin'], CROPPED_IMG['rmax'])
-    CROPPED_IMG_HEIGHT, CROPPED_IMG_WIDTH = (rmax-rmin, cmax-cmin)
-    CROPPED_IMG_SHAPE = (CROPPED_IMG_HEIGHT, CROPPED_IMG_WIDTH)
-    
 
     '''
         Determining r_x using B_h images
@@ -112,18 +111,22 @@ def determine_backdrop_position(view_dir, translate_dir):
             - Choose the one that is closest to the discrete stripe position x_discrete, of maximal pixel intensity 
     '''
     def find_r_x():
-
-        h_tmin, h_tmax = (FRAME['h_tmin'], FRAME['h_tmax'])     # [h_tmin, h_tmax)
-        NUM_FRAMES = h_tmax - h_tmin
         
         # [1] ------------------------
 
-        I_x = np.zeros((rmax-rmin, cmax-cmin, NUM_FRAMES))
-        for t in range(h_tmin, h_tmax):
-            img_path = os.path.join(imgdir_path, B_H_DIR, str(t) + ".png")
-            img = io.imread(img_path)[rmin:rmax, cmin:cmax]
-            I_x[:,:,(t-h_tmin)] = ndimage.gaussian_filter(rgb2gray(img), G_BLUR_SIGMA)
+        orig_dim = (275, 317)
 
+        I_x = np.zeros((275, 317, H_FRAMES))
+        
+        for t in range(H_FRAMES):
+            # print("t = ", t, " actual frame = ", t*10+FRAME_OFFSET['h'])
+
+            imgdir_path = os.path.join(BASEDIR, CAPTURE_DIR, translate_dir, B_H_DIR, view_dir)
+            img_path = os.path.join(imgdir_path, "small_" + str(t+1) + ".JPG")
+            img = io.imread(img_path)
+            I_x[:,:,t] = ndimage.gaussian_filter(rgb2gray(img), G_BLUR_SIGMA)
+        print(np.min(I_x), np.max(I_x))
+        # TODO normalize?
 
         # [2] ------------------------
 
@@ -133,111 +136,146 @@ def determine_backdrop_position(view_dir, translate_dir):
         I_prime_x[:,:,0]  = I_x[:,:,0]
         I_prime_x[:,:,-1] = I_x[:,:,-1]
 
-        for t in range(1, NUM_FRAMES-1):
+        for t in range(1, H_FRAMES-1):
             neighbors = np.dstack(( I_x[:,:,t-1].flatten(), 
                                     I_x[:,:,t  ].flatten(),
                                     I_x[:,:,t+1].flatten() ))
-            I_prime_x[:,:,t] = np.squeeze(np.gradient(neighbors, axis=-1))[:,1].reshape(CROPPED_IMG_SHAPE)
+            I_prime_x[:,:,t] = np.squeeze(np.gradient(neighbors, axis=-1))[:,1].reshape(orig_dim)
 
-
-        # [3] ------------------------
+        # print("[3] ------------------------")
 
         # TODO: could move this to be done in the above loop, and instead of doing t,t+1, do t-1,t
 
         # Calculate candidate position starting at t as that between t and t+1
         # Note: cannot compute zero-crossing candidate for t=h_tmax-h_tmin-1 (edge)
-        x_precise_candidates = np.zeros((CROPPED_IMG_HEIGHT, CROPPED_IMG_WIDTH, NUM_FRAMES))
-        for t in range(h_tmin, h_tmax-1):
+        x_precise_candidates = np.zeros((ROWS, COLS, H_FRAMES))
+        for t in range(0, H_FRAMES-1):
+
+            # NOTE: *** Actual **** frame # t (i.e. B_h_t) should be assigned at this stage!
+            REAL_T = t*10 + FRAME_OFFSET['h_tmin']
+            print("t = ", t, " actual frame = ", REAL_T)
 
             # Initialize precise candidates for each pixel as INF
             # So values that are unset will be ignored by closest-t tests
-            x_precise_t = np.ones((CROPPED_IMG_HEIGHT, CROPPED_IMG_WIDTH)) * np.inf
+            # x_precise_t = np.ones((ROWS, COLS)) * np.inf
+            x_precise_t = np.zeros((ROWS, COLS))
 
-            I_prime_x_t0, I_prime_x_t1 = (I_prime_x[:,:,t-h_tmin], I_prime_x[:,:,t-h_tmin+1])
+            I_prime_x_t0, I_prime_x_t1 = (I_prime_x[:,:,t], I_prime_x[:,:,t+1])
 
             # CASE: Derivative exactly = 0 -> trivially identify it as a zero-crossing
-            x_precise_t = np.where(I_prime_x_t0 == 0, t, x_precise_t)
+            # x_precise_t = np.where(I_prime_x_t0 == 0, REAL_T, x_precise_t)
 
-            # CASE: For both neighboring stripe positions, derivative = 0 --> use midpoint of the strip positions
-            x_precise_t = np.where((I_prime_x_t0 == 0) & (I_prime_x_t1 == 0), t+0.5, x_precise_t)
+            # # CASE: For both neighboring stripe positions, derivative = 0 --> use midpoint of the strip positions
+            # # NOTE: Since frames skip every 10 pixels, the midpoints scales too
+            # x_precise_t = np.where((I_prime_x_t0 == 0) & (I_prime_x_t1 == 0), REAL_T+5.0, x_precise_t)
 
             # CASE: I'(x) positive changes -> I'(x+1) negative. Represents local maxima
-            x_interpolated_t = t - (I_prime_x_t0 / (I_prime_x_t1 - I_prime_x_t0))
+            x_interpolated_t = ((REAL_T - (I_prime_x_t0 / (I_prime_x_t1 - I_prime_x_t0))) - FRAME_OFFSET['h_tmin'])/10 - 1
+            
+            min, max = (np.min(x_interpolated_t), np.max(np.ma.masked_invalid(x_interpolated_t)))
+            fig, ax = plt.subplots()
+            plt.imshow(x_interpolated_t, cmap='gray')
+            plt.show()
+
             x_precise_t = np.where((I_prime_x_t0 > 0.0) & (I_prime_x_t1 < 0.0), x_interpolated_t, x_precise_t)
             
-            x_precise_candidates[:,:,t-h_tmin] = x_precise_t
+            x_precise_candidates[:,:,t] = x_precise_t
 
-        # [4] ------------------------
+        # print(np.min(x_precise_candidates[:,:,30]), np.max(np.ma.masked_invalid(x_precise_candidates[:,:,30])))
+        
+        # print(np.mean(x_precise_candidates), np.mean(np.ma.masked_invalid(x_precise_candidates)))
+        # min, max = (np.min(x_precise_candidates), np.max(np.ma.masked_invalid(x_precise_candidates)))
+        # prime_min, prime_max = (np.min(I_prime_x), np.max(np.ma.masked_invalid(I_prime_x)))
+        # # fig, ax = plt.subplots()
+        # plt.subplot(1,2,1)
+        # plt.imshow(x_precise_candidates[:,:,30], cmap='gray')
+        # plt.subplot(1,2,2)
+        # plt.imshow((I_prime_x[:,:,30] - prime_min) / (prime_max-prime_min), cmap='gray')
+        # plt.show()
+
+
+        # print("[4] ------------------------")
         
         # Compute the discrete strip position that leads to maximal intensity
-        # Note again that we didn't compute the zero-crossing candidate for the last frames
+        # Note again that we didn't compute the zero-crossing candidate for the last frame
+        # So that column will not be particularly interesting
         I_x_max = np.argmax(I_x, axis=-1)
-        x_discrete_max = np.repeat((I_x_max)[:,:,np.newaxis], NUM_FRAMES-1, axis=-1)     # titled for comparison
+        x_discrete_max = np.repeat((I_x_max)[:,:,np.newaxis], H_FRAMES, axis=-1)     # titled for comparison
 
         # Find x_precise nearest to I_x_max
         # Using N-dimension nearest-value finding query described here:
         # https://stackoverflow.com/questions/2566412/find-nearest-value-in-numpy-array 
         x_precise_diffs = np.abs(x_precise_candidates - x_discrete_max)
-        x_precise_ids = np.nanargmin(x_precise_diffs, axis=-1)
-        x_precise = x_precise_candidates.flat[x_precise_ids]
+        # min, max = (np.min(x_precise_diffs), np.max(np.ma.masked_invalid(x_precise_diffs)))
+        # fig, ax = plt.subplots()
+        # ax.imshow((x_precise_diffs - min) / (max-min), cmap='jet')
+        # plt.show()
+        # print(np.min(x_precise_diffs), np.max(np.ma.masked_invalid(x_precise_diffs)))
+        # x_precise_ids = np.argmin(np.ma.masked_invalid(x_precise_diffs), axis=-1)
+        # print(np.min(x_precise_ids), np.max(np.ma.masked_invalid(x_precise_ids)))
 
-        return x_precise
+        # x_precise = x_precise_candidates.flat[x_precise_ids]
+
+        # print(np.min(x_precise), np.max(x_precise))
+
+        # return x_precise
 
 
     '''
         WLOG, the process for determining r_y using B_v is analogous to finding r_x
     '''
     def find_r_y():
+        print("blah")
 
-        v_tmin, v_tmax = (FRAME['v_tmin'], FRAME['v_tmax'])     # [h_tmin, h_tmax)
-        NUM_FRAMES = v_tmax - v_tmin,
+        # v_tmin, v_tmax = (FRAME['v_tmin'], FRAME['v_tmax'])     # [h_tmin, h_tmax)
+        # NUM_FRAMES = v_tmax - v_tmin,
 
-        # [1] ------------------------
+        # # [1] ------------------------
 
-        I_y = np.zeros((rmax-rmin, cmax-cmin, NUM_FRAMES))
-        for t in range(v_tmin, v_tmax):
-            img_path = os.path.join(imgdir_path, B_V_DIR, str(t) + ".png")
-            img = io.imread(img_path)[rmin:rmax, cmin:cmax]
-            I_y[:,:,(t-v_tmin)] = ndimage.gaussian_filter(rgb2gray(img), G_BLUR_SIGMA)
-
-
-        # [2] ------------------------
-
-        I_prime_y = np.zeros(I_y.shape)
-        I_prime_y[:,:,0]  = I_prime_y[:,:,0]
-        I_prime_y[:,:,-1] = I_prime_y[:,:,-1]
-
-        for t in range(1, NUM_FRAMES-1):
-            neighbors = np.dstack(( I_y[:,:,t-1].flatten(), 
-                                    I_y[:,:,t  ].flatten(),
-                                    I_y[:,:,t+1].flatten() ))
-            I_prime_y[:,:,t] = np.squeeze(np.gradient(neighbors, axis=-1))[:,1].reshape(CROPPED_IMG_SHAPE)
+        # I_y = np.zeros((rmax-rmin, cmax-cmin, NUM_FRAMES))
+        # for t in range(v_tmin, v_tmax):
+        #     img_path = os.path.join(imgdir_path, B_V_DIR, str(t) + ".png")
+        #     img = io.imread(img_path)[rmin:rmax, cmin:cmax]
+        #     I_y[:,:,(t-v_tmin)] = ndimage.gaussian_filter(rgb2gray(img), G_BLUR_SIGMA)
 
 
-        # [3] ------------------------
+        # # [2] ------------------------
 
-        # TODO: could move this to be done in the above loop, and instead of doing t,t+1, do t-1,t
-        # Calculate candidate position starting at t as that between t and t+1
-        y_precise_candidates = np.zeros((CROPPED_IMG_HEIGHT, CROPPED_IMG_WIDTH, NUM_FRAMES))
-        for t in range(v_tmin, v_tmax-1):
+        # I_prime_y = np.zeros(I_y.shape)
+        # I_prime_y[:,:,0]  = I_prime_y[:,:,0]
+        # I_prime_y[:,:,-1] = I_prime_y[:,:,-1]
 
-            # Initialize precise candidates for each pixel as INF
-            # So values that are unset will be ignored by closest-t tests
-            y_precise_t = np.ones((CROPPED_IMG_HEIGHT, CROPPED_IMG_WIDTH)) * np.inf
+        # for t in range(1, NUM_FRAMES-1):
+        #     neighbors = np.dstack(( I_y[:,:,t-1].flatten(), 
+        #                             I_y[:,:,t  ].flatten(),
+        #                             I_y[:,:,t+1].flatten() ))
+        #     I_prime_y[:,:,t] = np.squeeze(np.gradient(neighbors, axis=-1))[:,1].reshape(CROPPED_IMG_SHAPE)
 
-            I_prime_y_t0, I_prime_y_t1 = (I_prime_y[:,:,t-v_tmin], I_prime_y[:,:,(t+1)-v_tmin])
 
-            # CASE: Derivative exactly = 0 -> trivially identify it as a zero-crossing
-            y_precise_t = np.where(I_prime_y_t0 == 0, t, y_precise_t)
+        # # [3] ------------------------
 
-            # CASE: For both neighboring stripe positions, derivative = 0 --> use midpoint of the strip positions
-            y_precise_t = np.where((I_prime_y_t0 == 0) & (I_prime_y_t1 == 0), t+0.5, y_precise_t)
+        # # TODO: could move this to be done in the above loop, and instead of doing t,t+1, do t-1,t
+        # # Calculate candidate position starting at t as that between t and t+1
+        # y_precise_candidates = np.zeros((ROWS, COLS, NUM_FRAMES))
+        # for t in range(v_tmin, v_tmax-1):
 
-            # CASE: I'(y) positive changes -> I'(y+1) negative. Represents local maxima
-            y_interpolated_t = t - (I_prime_y_t0 / (I_prime_y_t1 - I_prime_y_t0))
-            y_precise_t = np.where((I_prime_y_t0 > 0.0) & (I_prime_y_t1 < 0.0), y_interpolated_t, y_precise_t)
+        #     # Initialize precise candidates for each pixel as INF
+        #     # So values that are unset will be ignored by closest-t tests
+        #     y_precise_t = np.ones((ROWS, COLS)) * np.inf
+
+        #     I_prime_y_t0, I_prime_y_t1 = (I_prime_y[:,:,t-v_tmin], I_prime_y[:,:,(t+1)-v_tmin])
+
+        #     # CASE: Derivative exactly = 0 -> trivially identify it as a zero-crossing
+        #     y_precise_t = np.where(I_prime_y_t0 == 0, t, y_precise_t)
+
+        #     # CASE: For both neighboring stripe positions, derivative = 0 --> use midpoint of the strip positions
+        #     y_precise_t = np.where((I_prime_y_t0 == 0) & (I_prime_y_t1 == 0), t+0.5, y_precise_t)
+
+        #     # CASE: I'(y) positive changes -> I'(y+1) negative. Represents local maxima
+        #     y_interpolated_t = t - (I_prime_y_t0 / (I_prime_y_t1 - I_prime_y_t0))
+        #     y_precise_t = np.where((I_prime_y_t0 > 0.0) & (I_prime_y_t1 < 0.0), y_interpolated_t, y_precise_t)
             
-            y_precise_candidates[:,:,t-v_tmin] = y_precise_t
+        #     y_precise_candidates[:,:,t-v_tmin] = y_precise_t
 
 
         # [4] ------------------------
@@ -256,10 +294,14 @@ def determine_backdrop_position(view_dir, translate_dir):
 
         return y_precise
 
-    r_x, r_y = (find_r_x(), find_r_y())
-    zeros = np.zeros(r_x.shape)
+
+
+    find_r_x()
+
+    # r_x, r_y = (find_r_x(), find_r_y())
+    # zeros = np.zeros(r_x.shape)
     
-    return np.dstack((r_x, r_y, zeros))
+    # return np.dstack((r_x, r_y, zeros))
 
 
 
@@ -526,9 +568,7 @@ def find_rotation_axis():
 
     return axis
 
-CAPTURE_DIR = "capture"
-ROTATED_DIRS = ["0", "-30", "-20", "-10", "10", "20", "30"]
-FRONT_DIR, BACK_DIR = ("front", "back")
+
 
 def reconstruction():
     '''
@@ -768,7 +808,6 @@ def reconstruction():
                         view_nf = to_view_vector(to_camera_vector(nf, ref_rmat))
 
                         # PROBABLY WRONG - we don't need to recompute, we're just evaluating accuracy of nf at sample location
-                        # This means we also need to convert b to the current view's coordinate frame
                         # view_b = to_view_point(to_camera_point(b_j, ref_rmat, ref_tvec), view_rmat, view_tvec).reshape(-1,3)
                         # view_nf = compute_nf(view_c, view_f, view_b, (Lf_i_c[1] - Lf_i_c[0]), M)
 
@@ -788,8 +827,11 @@ def reconstruction():
 
 def main():
     start = time.time()
-
     # gen_backdrop_images()
+
+    
+    determine_backdrop_position("0","front")
+
 
     # calibrate()
     # reconstruction()
