@@ -695,7 +695,7 @@ def reconstruction():
         print("axis_dir", axis_dir.shape)
         print("point", point.shape)
 
-        rvec = axis_dir.reshape(-1,1) * np.radians(angle)
+        rvec = axis_dir.reshape(-1,1) * np.radians(-angle)
         rmat = cv2.Rodrigues(rvec)[0]
 
         # Subtract pivot, then perform rotation, before adding the center back
@@ -706,7 +706,7 @@ def reconstruction():
     
     # Referenced: https://stackoverflow.com/questions/2259476/rotating-a-point-about-another-point-2d
     def rotate_axis(axis_center, axis_dir, angle, img):
-        rvec = axis_dir.reshape(-1,1) * np.radians(angle)
+        rvec = axis_dir.reshape(-1,1) * np.radians(-angle)
         rmat = cv2.Rodrigues(rvec)[0]
 
         # Subtract pivot, then perform rotation, before adding the center back
@@ -874,7 +874,6 @@ def reconstruction():
                             if (angle == 0): continue;   # skip reference camera
 
                             view_c = rotate_axis_pt(axis_center, axis_dir, angle, ref_c.reshape(-1,1))
-                            view_f = rotate_axis_pt(axis_center, axis_dir, angle, f_i.reshape(-1,1))
 
                             # Project the surfel (specifically point f but from the perspective of the validation camera) into the image plane to get image point qc
                             q_c_x, q_c_y = (cv2.projectPoints(view_c.astype(np.float32), cv2.Rodrigues(ref_rmat)[0], ref_tvec, mtx, dist)[0].astype(int).reshape(1,2))[0]
@@ -888,7 +887,7 @@ def reconstruction():
                             Lb_j_c = (VIEW_WORLD_PTS[view]["back"][q_c_y, q_c_x], VIEW_WORLD_PTS[view]["front"][q_c_y, q_c_x])
 
                             # Query the final ray
-                            Lf_i_c = (view_f, view_c) # (view_Q[q_c_y, q_c_x], view_c)
+                            Lf_i_c = (f_i, view_c) # (view_Q[q_c_y, q_c_x], view_c)
 
                             # Get nf expressed in the validation camera's coordinate frame
                             view_nf = rotate_axis_pt(axis_center, axis_dir, angle, nf)
@@ -900,16 +899,19 @@ def reconstruction():
                         if (E_s_ij < best_error):
                             best_surfel = (f_i, nf)
 
-                        print(" ENDS HERE ")
-                        break;
+                        # print(" ENDS HERE ")
+                        # break;
                 
                 surfel_points[y,x,:] = best_surfel[0].reshape(-1,3)
                 surfel_points[y,x,:] = best_surfel[1].reshape(-1,3)
 
         # np.savez("surfels.npz", points=surfel_points, normals=surfel_normals)    
-        # return surfel_points, surfel_normals
+        return surfel_points, surfel_normals
 
-    depth_sample()
+    surfels = depth_sample()
+
+    depths = compute_depth(ref_c, surfels)
+    return depths
 
 
 def main():
